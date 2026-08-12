@@ -30,6 +30,22 @@ class Settings(BaseSettings):
     app_port: int = 8000
     app_debug: bool = False
 
+    # Seguridad
+    secret_key: str = ""
+    jwt_algorithm: str = "HS256"
+    jwt_issuer: str = "eventos-codip-api"
+    access_token_expire_minutes: int = 60
+    password_change_token_expire_minutes: int = 15
+    recovery_token_expire_minutes: int = 30
+    password_min_length: int = 8
+    password_require_uppercase: bool = True
+    password_require_lowercase: bool = True
+    password_require_number: bool = True
+    password_require_special: bool = True
+    password_hash_argon2_time_cost: int = 3
+    password_hash_argon2_memory_cost: int = 65536
+    password_hash_argon2_parallelism: int = 4
+
     @property
     def database_url(self) -> URL:
         """
