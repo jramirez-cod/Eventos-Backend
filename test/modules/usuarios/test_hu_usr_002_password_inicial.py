@@ -6,7 +6,6 @@ from app.modules.auditoria.models import Auditoria
 from app.modules.usuarios.models import Usuario
 from test.modules.usuarios.conftest import (
     NEW_PASSWORD,
-    VALID_PASSWORD,
     access_token,
     create_role,
     create_user,

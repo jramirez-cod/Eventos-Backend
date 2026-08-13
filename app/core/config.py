@@ -65,7 +65,9 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()
+    # pydantic BaseSettings reads values from environment; static type checker
+    # may require explicit constructor args. Ignore arg-type here.
+    return Settings()  # type: ignore[call-arg]
 
 
 settings = get_settings()
