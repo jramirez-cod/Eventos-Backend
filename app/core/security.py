@@ -92,11 +92,24 @@ def _create_token(
     return jwt.encode(payload, _require_secret(), algorithm=settings.jwt_algorithm)
 
 
-def create_access_token(id_usuario: int) -> str:
+def create_access_token(
+    id_usuario: int,
+    id_rol: int,
+    nombre_usuario: str = "",
+    nombres: str = "",
+    apellidos: str = "",
+) -> str:
     return _create_token(
         subject=id_usuario,
         token_type=ACCESS_TOKEN_TYPE,
         expires_delta=timedelta(minutes=settings.access_token_expire_minutes),
+        extra_claims={
+            "id_usuario": id_usuario,
+            "id_rol": id_rol,
+            "nombre_usuario": nombre_usuario,
+            "nombres": nombres,
+            "apellidos": apellidos,
+        },
     )
 
 

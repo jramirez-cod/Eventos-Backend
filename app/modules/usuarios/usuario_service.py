@@ -39,12 +39,7 @@ class UsuarioService:
         self.usuarios = UsuarioRepository(db)
         self.auditoria = AuditoriaRepository(db)
 
-    async def crear_usuario(
-        self,
-        *,
-        data: UsuarioCreateDTO,
-        actor: Usuario,
-    ) -> Usuario:
+    async def crear_usuario(self, *, data: UsuarioCreateDTO, actor: Usuario) -> Usuario:
         rol = await self.usuarios.get_role(data.id_rol)
         if rol is None or not rol.estado:
             raise RolNotFoundError("Rol no encontrado.")
@@ -90,11 +85,7 @@ class UsuarioService:
             raise
 
     async def inactivar_usuario(
-        self,
-        *,
-        id_usuario: int,
-        data: InactivarUsuarioDTO,
-        actor: Usuario,
+        self, *, id_usuario: int, data: InactivarUsuarioDTO, actor: Usuario
     ) -> Usuario:
         usuario = await self.usuarios.get_by_id(id_usuario)
         if usuario is None:
@@ -111,6 +102,29 @@ class UsuarioService:
                 valor_anterior=anterior,
                 valor_nuevo={"estado": usuario.estado},
                 motivo=data.motivo,
+            )
+            await self.db.commit()
+            await self.db.refresh(usuario)
+            return usuario
+        except Exception:
+            await self.db.rollback()
+            raise
+
+    async def activar_usuario(self, *, id_usuario: int, actor: Usuario) -> Usuario:
+        usuario = await self.usuarios.get_by_id(id_usuario)
+        if usuario is None:
+            raise UsuarioNotFoundError("Usuario no encontrado.")
+
+        anterior = {"estado": usuario.estado}
+        try:
+            await self.usuarios.activate_user(usuario)
+            await self.auditoria.create(
+                id_usuario=actor.id_usuario,
+                entidad="usuario",
+                id_entidad=usuario.id_usuario,
+                accion="ACTIVACION_USUARIO",
+                valor_anterior=anterior,
+                valor_nuevo={"estado": usuario.estado},
             )
             await self.db.commit()
             await self.db.refresh(usuario)

@@ -5,6 +5,10 @@ from os import getenv
 from pathlib import Path
 import sys
 
+# Fix para Windows: usar SelectorEventLoop en lugar de ProactorEventLoop
+if sys.platform == 'win32':
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
 from sqlalchemy import inspect, select
 
 ROOT = Path(__file__).resolve().parents[1]

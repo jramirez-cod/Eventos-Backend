@@ -2,6 +2,7 @@ from datetime import UTC, datetime
 
 from sqlalchemy import Select, exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import joinedload
 
 from app.modules.usuarios.models import (
     Modulo,
@@ -21,9 +22,7 @@ class UsuarioRepository:
         return await self.db.get(Usuario, id_usuario)
 
     async def get_by_username(self, nombre_usuario: str) -> Usuario | None:
-        stmt = select(Usuario).where(
-            func.lower(Usuario.nombre_usuario) == nombre_usuario.lower()
-        )
+        stmt = select(Usuario).where(func.lower(Usuario.nombre_usuario) == nombre_usuario.lower())
         return await self.db.scalar(stmt)
 
     async def get_by_email(self, correo: str) -> Usuario | None:
@@ -38,9 +37,7 @@ class UsuarioRepository:
         return await self.db.scalar(stmt)
 
     async def get_module_by_name(self, nombre_modulo: str) -> Modulo | None:
-        stmt = select(Modulo).where(
-            func.upper(Modulo.nombre_modulo) == nombre_modulo.upper()
-        )
+        stmt = select(Modulo).where(func.upper(Modulo.nombre_modulo) == nombre_modulo.upper())
         return await self.db.scalar(stmt)
 
     async def get_permission_by_name(self, nombre_permiso: str) -> Permiso | None:
@@ -94,6 +91,11 @@ class UsuarioRepository:
         await self.db.flush()
         return usuario
 
+    async def activate_user(self, usuario: Usuario) -> Usuario:
+        usuario.estado = True
+        await self.db.flush()
+        return usuario
+
     async def create_recovery_token(
         self,
         *,
@@ -110,28 +112,18 @@ class UsuarioRepository:
         await self.db.flush()
         return token
 
-    async def get_recovery_token_by_hash(
-        self, token_hash: str
-    ) -> UsuarioTokenRecuperacion | None:
+    async def get_recovery_token_by_hash(self, token_hash: str) -> UsuarioTokenRecuperacion | None:
         stmt = select(UsuarioTokenRecuperacion).where(
             UsuarioTokenRecuperacion.token_hash == token_hash
         )
         return await self.db.scalar(stmt)
 
-    async def mark_recovery_token_used(
-        self, token: UsuarioTokenRecuperacion
-    ) -> UsuarioTokenRecuperacion:
+    async def mark_recovery_token_used(self, token: UsuarioTokenRecuperacion) -> UsuarioTokenRecuperacion:
         token.utilizado_en = datetime.now(UTC)
         await self.db.flush()
         return token
 
-    async def has_permission(
-        self,
-        *,
-        id_rol: int,
-        modulo: str,
-        permiso: str,
-    ) -> bool:
+    async def has_permission(self, *, id_rol: int, modulo: str, permiso: str) -> bool:
         stmt: Select[tuple[bool]] = select(
             exists().where(
                 RolPermisoModulo.id_rol == id_rol,
@@ -144,3 +136,17 @@ class UsuarioRepository:
             )
         )
         return bool(await self.db.scalar(stmt))
+
+    async def list_all(self) -> list[Usuario]:
+        stmt = (
+            select(Usuario)
+            .options(joinedload(Usuario.rol))
+            .order_by(Usuario.creado_en.desc())
+        )
+        result = await self.db.execute(stmt)
+        return list(result.scalars().all())
+
+    async def list_roles(self) -> list[Rol]:
+        stmt = select(Rol).where(Rol.estado.is_(True)).order_by(Rol.nombre_rol)
+        result = await self.db.execute(stmt)
+        return list(result.scalars().all())

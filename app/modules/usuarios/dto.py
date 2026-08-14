@@ -1,4 +1,6 @@
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
 
 
 class LoginRequestDTO(BaseModel):
@@ -37,6 +39,15 @@ class RestablecerPasswordRequestDTO(BaseModel):
     confirmar_password: str = Field(min_length=1)
 
 
+class RolResponseDTO(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id_rol: int
+    nombre_rol: str
+    descripcion: str | None = None
+    estado: bool
+
+
 class UsuarioCreateDTO(BaseModel):
     id_rol: int
     nombre_usuario: str = Field(min_length=1, max_length=80)
@@ -55,8 +66,26 @@ class UsuarioResponseDTO(BaseModel):
     apellidos: str
     correo: EmailStr
     id_rol: int
+    nombre_rol: str = ""
     estado: bool
     debe_cambiar_password: bool
+
+    @model_validator(mode="before")
+    @classmethod
+    def extract_nombre_rol(cls, data: Any) -> Any:
+        if hasattr(data, "rol") and data.rol is not None:
+            return {
+                "id_usuario": data.id_usuario,
+                "nombre_usuario": data.nombre_usuario,
+                "nombres": data.nombres,
+                "apellidos": data.apellidos,
+                "correo": data.correo,
+                "id_rol": data.id_rol,
+                "nombre_rol": data.rol.nombre_rol,
+                "estado": data.estado,
+                "debe_cambiar_password": data.debe_cambiar_password,
+            }
+        return data
 
 
 class InactivarUsuarioDTO(BaseModel):

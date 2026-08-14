@@ -98,7 +98,13 @@ class AuthService:
         return LoginResponseDTO(
             debe_cambiar_password=False,
             token_type=security.ACCESS_TOKEN_TYPE,
-            access_token=security.create_access_token(usuario.id_usuario),
+            access_token=security.create_access_token(
+                usuario.id_usuario,
+                usuario.id_rol,
+                usuario.nombre_usuario,
+                usuario.nombres,
+                usuario.apellidos,
+            ),
         )
 
     async def cambiar_password_inicial(
@@ -138,7 +144,13 @@ class AuthService:
         return LoginResponseDTO(
             debe_cambiar_password=False,
             token_type=security.ACCESS_TOKEN_TYPE,
-            access_token=security.create_access_token(usuario.id_usuario),
+            access_token=security.create_access_token(
+                usuario.id_usuario,
+                usuario.id_rol,
+                usuario.nombre_usuario,
+                usuario.nombres,
+                usuario.apellidos,
+            ),
         )
 
     async def solicitar_recuperacion(
@@ -223,7 +235,13 @@ class AuthService:
         return LoginResponseDTO(
             debe_cambiar_password=usuario.debe_cambiar_password,
             token_type=security.ACCESS_TOKEN_TYPE,
-            access_token=security.create_access_token(usuario.id_usuario),
+            access_token=security.create_access_token(
+                usuario.id_usuario,
+                usuario.id_rol,
+                usuario.nombre_usuario,
+                usuario.nombres,
+                usuario.apellidos,
+            ),
         )
 
     async def _get_user_from_password_change_token(self, token: str) -> Usuario:
