@@ -19,7 +19,12 @@ class UsuarioRepository:
         self.db = db
 
     async def get_by_id(self, id_usuario: int) -> Usuario | None:
-        return await self.db.get(Usuario, id_usuario)
+        stmt = (
+            select(Usuario)
+            .options(joinedload(Usuario.rol))
+            .where(Usuario.id_usuario == id_usuario)
+        )
+        return await self.db.scalar(stmt)
 
     async def get_by_username(self, nombre_usuario: str) -> Usuario | None:
         stmt = select(Usuario).where(func.lower(Usuario.nombre_usuario) == nombre_usuario.lower())

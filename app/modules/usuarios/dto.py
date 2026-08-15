@@ -1,6 +1,8 @@
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
+from sqlalchemy import inspect as sqlalchemy_inspect
+from sqlalchemy.exc import NoInspectionAvailable
 
 
 class LoginRequestDTO(BaseModel):
@@ -73,7 +75,13 @@ class UsuarioResponseDTO(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def extract_nombre_rol(cls, data: Any) -> Any:
-        if hasattr(data, "rol") and data.rol is not None:
+        rol_is_loaded = False
+        try:
+            rol_is_loaded = "rol" not in sqlalchemy_inspect(data).unloaded
+        except NoInspectionAvailable:
+            rol_is_loaded = hasattr(data, "rol")
+
+        if rol_is_loaded and getattr(data, "rol", None) is not None:
             return {
                 "id_usuario": data.id_usuario,
                 "nombre_usuario": data.nombre_usuario,

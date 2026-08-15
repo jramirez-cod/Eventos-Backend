@@ -194,7 +194,13 @@ async def seed_admin_with_permissions(session: AsyncSession) -> tuple[Rol, Usuar
 
 
 def access_token(usuario: Usuario) -> str:
-    return security.create_access_token(usuario.id_usuario)
+    return security.create_access_token(
+        usuario.id_usuario,
+        usuario.id_rol,
+        usuario.nombre_usuario,
+        usuario.nombres,
+        usuario.apellidos,
+    )
 
 
 def auth_header(usuario: Usuario) -> dict[str, str]:

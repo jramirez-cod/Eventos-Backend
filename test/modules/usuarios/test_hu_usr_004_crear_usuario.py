@@ -52,6 +52,7 @@ async def test_administrador_con_permiso_puede_crear_usuario(
         "apellidos": "Lopez",
         "correo": "mlopez@codip.pe",
         "id_rol": role_id,
+        "nombre_rol": "Operador",
         "estado": True,
         "debe_cambiar_password": True,
     }

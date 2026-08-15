@@ -78,8 +78,8 @@ class UsuarioService:
                 },
             )
             await self.db.commit()
-            await self.db.refresh(usuario)
-            return usuario
+            usuario_con_rol = await self.usuarios.get_by_id(usuario.id_usuario)
+            return usuario_con_rol or usuario
         except Exception:
             await self.db.rollback()
             raise
@@ -104,8 +104,8 @@ class UsuarioService:
                 motivo=data.motivo,
             )
             await self.db.commit()
-            await self.db.refresh(usuario)
-            return usuario
+            usuario_con_rol = await self.usuarios.get_by_id(usuario.id_usuario)
+            return usuario_con_rol or usuario
         except Exception:
             await self.db.rollback()
             raise
@@ -127,8 +127,8 @@ class UsuarioService:
                 valor_nuevo={"estado": usuario.estado},
             )
             await self.db.commit()
-            await self.db.refresh(usuario)
-            return usuario
+            usuario_con_rol = await self.usuarios.get_by_id(usuario.id_usuario)
+            return usuario_con_rol or usuario
         except Exception:
             await self.db.rollback()
             raise
