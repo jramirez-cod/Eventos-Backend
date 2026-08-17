@@ -12,6 +12,8 @@ os.environ.setdefault("SECRET_KEY", "test-secret-key-for-usuarios-module")
 os.environ.setdefault("PASSWORD_HASH_ARGON2_TIME_COST", "1")
 os.environ.setdefault("PASSWORD_HASH_ARGON2_MEMORY_COST", "1024")
 os.environ.setdefault("PASSWORD_HASH_ARGON2_PARALLELISM", "1")
+os.environ["EMAIL_ENABLED"] = "false"
+os.environ["EMAIL_PRINT_CODE_TO_CONSOLE"] = "false"
 
 from app.core import security  # noqa: E402
 from app.core.config import settings  # noqa: E402

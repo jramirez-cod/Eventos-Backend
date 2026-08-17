@@ -6,9 +6,12 @@ from sqlalchemy import select
 from app.core import security
 from app.modules.auditoria.models import Auditoria
 from app.core.config import settings
+from app.modules.comunicaciones.email_service import (
+    InitialPasswordEmail,
+    notify_initial_password_code,
+)
 from app.modules.usuarios.auth_service import (
     AuthService,
-    development_initial_password_code_notifier,
 )
 from app.modules.usuarios.dto import LoginRequestDTO
 from app.modules.usuarios.models import Usuario, UsuarioTokenRecuperacion
@@ -313,13 +316,19 @@ async def test_login_inicial_envia_codigo_al_correo_configurado(
         "generate_initial_verification_code",
         lambda: CODIGO_VERIFICACION,
     )
-    outbox: list[tuple[str, str]] = []
+    outbox: list[InitialPasswordEmail] = []
 
-    async def notifier(email: str, code: str) -> None:
-        outbox.append((email, code))
+    async def notifier(message: InitialPasswordEmail) -> None:
+        outbox.append(message)
 
     async with session_factory() as session:
         role = await create_role(session, "Operador")
+        await create_user(
+            session,
+            role,
+            username="admin-email",
+            email="codipcorporativo@gmail.com",
+        )
         await create_user(
             session,
             role,
@@ -330,6 +339,8 @@ async def test_login_inicial_envia_codigo_al_correo_configurado(
         )
         await session.commit()
 
+        monkeypatch.setattr(settings, "email_enabled", True)
+        monkeypatch.setattr(settings, "email_sender_user_id", 1)
         response = await AuthService(
             session,
             initial_password_notifier=notifier,
@@ -342,7 +353,11 @@ async def test_login_inicial_envia_codigo_al_correo_configurado(
 
     assert response.access_token is None
     assert response.codigo_verificacion_requerido is True
-    assert outbox == [("dylan@codip.pe", CODIGO_VERIFICACION)]
+    assert len(outbox) == 1
+    assert outbox[0].sender_email == "codipcorporativo@gmail.com"
+    assert outbox[0].recipient_email == "dylan@codip.pe"
+    assert outbox[0].recipient_name == "Juan Prueba"
+    assert outbox[0].code == CODIGO_VERIFICACION
 
 
 async def test_codigo_queda_vinculado_al_intento_de_login_que_lo_genero(
@@ -401,15 +416,21 @@ async def test_codigo_queda_vinculado_al_intento_de_login_que_lo_genero(
     assert correct_attempt.status_code == 200
 
 
-async def test_codigo_se_imprime_en_consola_solo_con_app_debug(
+async def test_codigo_se_imprime_en_consola_solo_si_esta_habilitado(
     capsys,
     monkeypatch,
 ) -> None:
-    monkeypatch.setattr(settings, "app_debug", True)
+    monkeypatch.setattr(settings, "email_enabled", False)
+    monkeypatch.setattr(settings, "email_print_code_to_console", True)
 
-    await development_initial_password_code_notifier(
-        "admin@codip.pe",
-        CODIGO_VERIFICACION,
+    await notify_initial_password_code(
+        InitialPasswordEmail(
+            sender_email="codipcorporativo@gmail.com",
+            recipient_email="admin@codip.pe",
+            recipient_name="Administrador",
+            code=CODIGO_VERIFICACION,
+            expires_minutes=10,
+        )
     )
 
     output = capsys.readouterr().out
@@ -417,9 +438,14 @@ async def test_codigo_se_imprime_en_consola_solo_con_app_debug(
     assert "a****@codip.pe" in output
     assert CODIGO_VERIFICACION in output
 
-    monkeypatch.setattr(settings, "app_debug", False)
-    await development_initial_password_code_notifier(
-        "admin@codip.pe",
-        "999999",
+    monkeypatch.setattr(settings, "email_print_code_to_console", False)
+    await notify_initial_password_code(
+        InitialPasswordEmail(
+            sender_email="codipcorporativo@gmail.com",
+            recipient_email="admin@codip.pe",
+            recipient_name="Administrador",
+            code="999999",
+            expires_minutes=10,
+        )
     )
     assert capsys.readouterr().out == ""

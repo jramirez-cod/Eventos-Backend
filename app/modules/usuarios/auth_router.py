@@ -21,6 +21,7 @@ from app.modules.usuarios.auth_service import (
     InvalidRecoveryTokenError,
     PasswordMismatchError,
     PasswordPolicyViolationError,
+    VerificationEmailDeliveryError,
 )
 
 
@@ -43,6 +44,11 @@ async def login(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Usuario inactivo.",
+        )
+    except VerificationEmailDeliveryError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="No se pudo enviar el código de verificación.",
         )
 
 
@@ -69,6 +75,11 @@ async def token(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Usuario inactivo.",
             headers={"WWW-Authenticate": "Bearer"},
+        )
+    except VerificationEmailDeliveryError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="No se pudo enviar el código de verificación.",
         )
 
     if response.debe_cambiar_password or not response.access_token:

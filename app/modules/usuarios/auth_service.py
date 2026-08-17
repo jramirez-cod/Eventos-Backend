@@ -6,6 +6,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core import security
 from app.core.config import settings
 from app.modules.auditoria.repository import AuditoriaRepository
+from app.modules.comunicaciones.email_service import (
+    EmailDeliveryError,
+    InitialPasswordEmail,
+    mask_email,
+    notify_initial_password_code,
+)
 from app.modules.usuarios.dto import (
     CambioPasswordInicialRequestDTO,
     LoginRequestDTO,
@@ -23,7 +29,7 @@ RECOVERY_ACCEPTED_MESSAGE = (
 )
 
 PasswordRecoveryNotifier = Callable[[str, str], Awaitable[None]]
-InitialPasswordCodeNotifier = Callable[[str, str], Awaitable[None]]
+InitialPasswordCodeNotifier = Callable[[InitialPasswordEmail], Awaitable[None]]
 
 
 class AuthServiceError(Exception):
@@ -56,27 +62,16 @@ class InvalidRecoveryTokenError(AuthServiceError):
     pass
 
 
+class VerificationEmailDeliveryError(AuthServiceError):
+    pass
+
+
 async def noop_password_recovery_notifier(_: str, __: str) -> None:
     """
     Punto de integración para el futuro módulo comunicaciones.
 
     Recibe correo y token en claro, pero no lo registra ni lo persiste.
     """
-
-
-async def development_initial_password_code_notifier(
-    email: str,
-    code: str,
-) -> None:
-    """Muestra el código solo en desarrollo mientras no exista proveedor de correo."""
-    if not settings.app_debug:
-        return
-
-    masked_email = AuthService._mask_email(email)
-    print(
-        f"[DEV AUTH] Código de primer ingreso para {masked_email}: {code}",
-        flush=True,
-    )
 
 
 class AuthService:
@@ -86,7 +81,7 @@ class AuthService:
         *,
         recovery_notifier: PasswordRecoveryNotifier = noop_password_recovery_notifier,
         initial_password_notifier: InitialPasswordCodeNotifier = (
-            development_initial_password_code_notifier
+            notify_initial_password_code
         ),
     ) -> None:
         self.db = db
@@ -106,6 +101,7 @@ class AuthService:
             raise InactiveUserError("Usuario inactivo.")
 
         if usuario.debe_cambiar_password:
+            sender_email = await self._get_sender_email()
             token = security.create_password_change_token(usuario.id_usuario)
             token_payload = security.decode_password_change_token(token)
             token_id = str(token_payload["jti"])
@@ -119,7 +115,7 @@ class AuthService:
             )
 
             try:
-                await self.usuarios.create_recovery_token(
+                stored_token = await self.usuarios.create_recovery_token(
                     usuario=usuario,
                     token_hash=code_hash,
                     expira_en=expira_en,
@@ -129,13 +125,36 @@ class AuthService:
                 await self.db.rollback()
                 raise
 
-            await self.initial_password_notifier(usuario.correo, verification_code)
+            try:
+                await self.initial_password_notifier(
+                    InitialPasswordEmail(
+                        sender_email=sender_email,
+                        recipient_email=usuario.correo,
+                        recipient_name=(
+                            f"{usuario.nombres} {usuario.apellidos}".strip()
+                        ),
+                        code=verification_code,
+                        expires_minutes=(
+                            settings.initial_password_code_expire_minutes
+                        ),
+                    )
+                )
+            except EmailDeliveryError as exc:
+                try:
+                    await self.usuarios.mark_recovery_token_used(stored_token)
+                    await self.db.commit()
+                except Exception:
+                    await self.db.rollback()
+                raise VerificationEmailDeliveryError(
+                    "No se pudo enviar el código de verificación."
+                ) from exc
+
             return LoginResponseDTO(
                 debe_cambiar_password=True,
                 token_type=security.PASSWORD_CHANGE_TOKEN_TYPE,
                 password_change_token=token,
                 codigo_verificacion_requerido=True,
-                correo_enmascarado=self._mask_email(usuario.correo),
+                correo_enmascarado=mask_email(usuario.correo),
             )
 
         await self.usuarios.update_last_login(usuario)
@@ -320,13 +339,16 @@ class AuthService:
             raise InvalidPasswordChangeTokenError("Token inválido.")
         return usuario, payload
 
-    @staticmethod
-    def _mask_email(email: str) -> str:
-        local_part, separator, domain = email.partition("@")
-        if not separator:
-            return "***"
-        visible = local_part[:1]
-        return f"{visible}{'*' * max(3, len(local_part) - 1)}@{domain}"
+    async def _get_sender_email(self) -> str:
+        if not settings.email_enabled:
+            return ""
+
+        sender = await self.usuarios.get_by_id(settings.email_sender_user_id)
+        if sender is None or not sender.correo:
+            raise VerificationEmailDeliveryError(
+                "El remitente de correo no está configurado."
+            )
+        return sender.correo
 
     @staticmethod
     def _validate_password_policy(password: str) -> None:
