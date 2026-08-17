@@ -174,6 +174,32 @@ async def create_recovery_token(
     return token
 
 
+async def create_initial_password_challenge(
+    session: AsyncSession,
+    usuario: Usuario,
+    *,
+    code: str = "482913",
+    expira_en: datetime | None = None,
+    utilizado_en: datetime | None = None,
+) -> tuple[str, str]:
+    password_change_token = security.create_password_change_token(
+        usuario.id_usuario
+    )
+    payload = security.decode_password_change_token(password_change_token)
+    stored = UsuarioTokenRecuperacion(
+        id_usuario=usuario.id_usuario,
+        token_hash=security.hash_initial_verification_code(
+            token_id=str(payload["jti"]),
+            code=code,
+        ),
+        expira_en=expira_en or datetime.now(UTC) + timedelta(minutes=10),
+        utilizado_en=utilizado_en,
+    )
+    session.add(stored)
+    await session.flush()
+    return password_change_token, code
+
+
 async def seed_admin_with_permissions(session: AsyncSession) -> tuple[Rol, Usuario]:
     admin_role = await create_role(session, "Administrador de Eventos")
     await grant_permission(
@@ -214,6 +240,7 @@ __all__ = [
     "access_token",
     "auth_header",
     "create_recovery_token",
+    "create_initial_password_challenge",
     "create_role",
     "create_user",
     "seed_admin_with_permissions",

@@ -1,9 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordRequestForm
+from fastapi.security import HTTPAuthorizationCredentials, OAuth2PasswordRequestForm
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
-from app.modules.usuarios.dependencies import oauth2_scheme
+from app.modules.usuarios.dependencies import password_change_bearer
 from app.modules.usuarios.dto import (
     CambioPasswordInicialRequestDTO,
     LoginRequestDTO,
@@ -87,11 +87,21 @@ async def token(
 @router.post("/cambiar-password-inicial", response_model=LoginResponseDTO)
 async def cambiar_password_inicial(
     data: CambioPasswordInicialRequestDTO,
-    token: str = Depends(oauth2_scheme),
+    credentials: HTTPAuthorizationCredentials | None = Depends(password_change_bearer),
     db: AsyncSession = Depends(get_db),
 ) -> LoginResponseDTO:
+    if credentials is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token inválido para cambio de contraseña inicial.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
     try:
-        return await AuthService(db).cambiar_password_inicial(token=token, data=data)
+        return await AuthService(db).cambiar_password_inicial(
+            token=credentials.credentials,
+            data=data,
+        )
     except InvalidPasswordChangeTokenError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

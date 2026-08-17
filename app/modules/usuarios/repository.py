@@ -118,8 +118,10 @@ class UsuarioRepository:
         return token
 
     async def get_recovery_token_by_hash(self, token_hash: str) -> UsuarioTokenRecuperacion | None:
-        stmt = select(UsuarioTokenRecuperacion).where(
-            UsuarioTokenRecuperacion.token_hash == token_hash
+        stmt = (
+            select(UsuarioTokenRecuperacion)
+            .where(UsuarioTokenRecuperacion.token_hash == token_hash)
+            .with_for_update()
         )
         return await self.db.scalar(stmt)
 

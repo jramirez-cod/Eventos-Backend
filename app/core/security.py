@@ -35,6 +35,10 @@ class PasswordPolicyError(ValueError):
         super().__init__("La contraseña no cumple la política configurada.")
 
 
+class TemporaryPasswordPolicyError(ValueError):
+    pass
+
+
 def _require_secret() -> str:
     if not settings.secret_key:
         raise RuntimeError("SECRET_KEY no está configurado.")
@@ -69,6 +73,19 @@ def validate_password_policy(password: str) -> None:
 
     if errors:
         raise PasswordPolicyError(errors)
+
+
+def validate_temporary_dni_password(password: str) -> None:
+    is_valid_dni = (
+        len(password) == settings.temporary_dni_length
+        and password.isascii()
+        and password.isdigit()
+    )
+    if not is_valid_dni:
+        raise TemporaryPasswordPolicyError(
+            "La contraseña temporal debe ser un DNI de "
+            f"{settings.temporary_dni_length} dígitos."
+        )
 
 
 def _create_token(
@@ -118,6 +135,7 @@ def create_password_change_token(id_usuario: int) -> str:
         subject=id_usuario,
         token_type=PASSWORD_CHANGE_TOKEN_TYPE,
         expires_delta=timedelta(minutes=settings.password_change_token_expire_minutes),
+        extra_claims={"jti": secrets.token_urlsafe(24)},
     )
 
 
@@ -153,6 +171,11 @@ def generate_recovery_token() -> str:
     return secrets.token_urlsafe(48)
 
 
+def generate_initial_verification_code() -> str:
+    length = settings.initial_password_code_length
+    return f"{secrets.randbelow(10**length):0{length}d}"
+
+
 def hash_recovery_token(token: str) -> str:
     digest = hmac.new(
         _require_secret().encode("utf-8"),
@@ -160,6 +183,10 @@ def hash_recovery_token(token: str) -> str:
         hashlib.sha256,
     ).hexdigest()
     return digest
+
+
+def hash_initial_verification_code(*, token_id: str, code: str) -> str:
+    return hash_recovery_token(f"initial_password:{token_id}:{code}")
 
 
 def recovery_token_matches(token: str, token_hash: str) -> bool:

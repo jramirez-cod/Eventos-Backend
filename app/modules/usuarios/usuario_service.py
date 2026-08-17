@@ -50,7 +50,7 @@ class UsuarioService:
         if await self.usuarios.get_by_email(str(data.correo)):
             raise DuplicateEmailError("Correo ya existe.")
 
-        self._validate_password_policy(data.password_temporal)
+        self._validate_temporary_password(data.password_temporal)
 
         try:
             usuario = await self.usuarios.create_user(
@@ -134,8 +134,8 @@ class UsuarioService:
             raise
 
     @staticmethod
-    def _validate_password_policy(password: str) -> None:
+    def _validate_temporary_password(password: str) -> None:
         try:
-            security.validate_password_policy(password)
-        except security.PasswordPolicyError as exc:
-            raise PasswordPolicyViolationError(exc.errors) from exc
+            security.validate_temporary_dni_password(password)
+        except security.TemporaryPasswordPolicyError as exc:
+            raise PasswordPolicyViolationError([str(exc)]) from exc

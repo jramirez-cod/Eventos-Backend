@@ -42,6 +42,9 @@ JWT_ALGORITHM=HS256
 JWT_ISSUER=eventos-codip-api
 ACCESS_TOKEN_EXPIRE_MINUTES=60
 PASSWORD_CHANGE_TOKEN_EXPIRE_MINUTES=15
+INITIAL_PASSWORD_CODE_EXPIRE_MINUTES=10
+INITIAL_PASSWORD_CODE_LENGTH=6
+TEMPORARY_DNI_LENGTH=8
 RECOVERY_TOKEN_EXPIRE_MINUTES=30
 
 PASSWORD_MIN_LENGTH=8
@@ -52,6 +55,20 @@ PASSWORD_REQUIRE_SPECIAL=true
 ```
 
 `SECRET_KEY` es obligatorio para login, JWT, cambio de contraseña y recuperación. No debe subirse al repositorio.
+
+Mientras no exista un proveedor de correo, en desarrollo puede mostrarse el código de primer ingreso en la consola del servidor:
+
+```env
+APP_DEBUG=true
+```
+
+Después de reiniciar FastAPI, un primer login válido mostrará algo similar a:
+
+```text
+[DEV AUTH] Código de primer ingreso para a****@codip.pe: 482913
+```
+
+Con `APP_DEBUG=false`, que es el valor predeterminado y el requerido en producción, el código nunca se imprime. Tampoco se imprimen contraseñas, JWT ni hashes.
 
 ## Ejecutar FastAPI
 
@@ -330,7 +347,7 @@ JSON:
 ```json
 {
   "nombre_usuario": "mlopez",
-  "password": "Temporal1!"
+  "password": "74859632"
 }
 ```
 
@@ -341,11 +358,13 @@ Respuesta esperada si `debe_cambiar_password=true`:
   "debe_cambiar_password": true,
   "token_type": "password_change",
   "access_token": null,
-  "password_change_token": "eyJ..."
+  "password_change_token": "eyJ...",
+  "codigo_verificacion_requerido": true,
+  "correo_enmascarado": "m*****@codip.pe"
 }
 ```
 
-Este token solo sirve para cambiar la contraseña inicial.
+El backend genera un código de seis dígitos y prepara su envío al correo registrado. En PostgreSQL guarda solamente el hash del código. El token recibido solo sirve para completar el cambio inicial.
 
 ### 3. Cambiar contraseña inicial
 
@@ -355,16 +374,17 @@ Endpoint:
 POST /api/v1/auth/cambiar-password-inicial
 ```
 
-En Swagger, presionar **Authorize** y pegar:
+En el candado del propio endpoint, seleccionar `PasswordChangeBearer` y pegar únicamente:
 
 ```text
-Bearer eyJ...password_change_token...
+eyJ...password_change_token...
 ```
 
 JSON:
 
 ```json
 {
+  "codigo_verificacion": "482913",
   "nueva_password": "NuevaPassword1!",
   "confirmar_password": "NuevaPassword1!"
 }
@@ -377,7 +397,9 @@ Respuesta satisfactoria:
   "debe_cambiar_password": false,
   "token_type": "access",
   "access_token": "eyJ...",
-  "password_change_token": null
+  "password_change_token": null,
+  "codigo_verificacion_requerido": false,
+  "correo_enmascarado": null
 }
 ```
 
@@ -467,7 +489,7 @@ JSON:
   "nombres": "María",
   "apellidos": "López",
   "correo": "mlopez@codip.pe",
-  "password_temporal": "Temporal1!"
+  "password_temporal": "74859632"
 }
 ```
 
@@ -486,7 +508,7 @@ Respuesta satisfactoria:
 }
 ```
 
-La contraseña temporal se guarda como hash y no se retorna.
+La contraseña temporal corresponde al DNI de ocho dígitos. Se guarda como hash y no se retorna.
 
 Errores comunes:
 
@@ -507,11 +529,11 @@ curl -X POST 'http://127.0.0.1:8000/api/v1/usuarios' \
     "nombres": "Admin",
     "apellidos": "Evento",
     "correo": "adminEvento@codip.pe",
-    "password_temporal": "Temporal1!"
+    "password_temporal": "74859632"
   }'
 ```
 
-También fallará si la contraseña temporal es débil. Por ejemplo, `"1234"` no cumple la política configurada.
+También fallará si la contraseña temporal no contiene exactamente ocho dígitos. La política fuerte se aplica a la nueva contraseña definitiva.
 
 ### 7. Inactivar usuario
 
@@ -590,6 +612,7 @@ test/modules/usuarios/test_hu_usr_002_password_inicial.py
 test/modules/usuarios/test_hu_usr_003_recuperacion.py
 test/modules/usuarios/test_hu_usr_004_crear_usuario.py
 test/modules/usuarios/test_hu_usr_005_inactivar_usuario.py
+test/modules/usuarios/test_flujo_primer_ingreso_dni.py
 ```
 
 Fixture principal:
@@ -680,8 +703,8 @@ JWT anterior deja de funcionar después de la inactivación
 .venv/bin/python -m pytest test/modules/usuarios -q
 ```
 
-Resultado verificado:
+Resultado esperado con PostgreSQL disponible:
 
 ```text
-29 passed
+36 passed
 ```

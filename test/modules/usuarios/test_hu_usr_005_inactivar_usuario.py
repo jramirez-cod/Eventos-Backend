@@ -135,7 +135,7 @@ async def test_jwt_anterior_deja_de_funcionar_despues_de_inactivacion(
             "nombres": "Intento",
             "apellidos": "Fallido",
             "correo": "intento@codip.pe",
-            "password_temporal": "Temporal1!",
+            "password_temporal": "74859632",
         },
     )
 

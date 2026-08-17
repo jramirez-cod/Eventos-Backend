@@ -36,6 +36,9 @@ class Settings(BaseSettings):
     jwt_issuer: str = "eventos-codip-api"
     access_token_expire_minutes: int = 60
     password_change_token_expire_minutes: int = 15
+    initial_password_code_expire_minutes: int = 10
+    initial_password_code_length: int = 6
+    temporary_dni_length: int = 8
     recovery_token_expire_minutes: int = 30
     password_min_length: int = 8
     password_require_uppercase: bool = True

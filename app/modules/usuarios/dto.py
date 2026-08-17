@@ -15,6 +15,8 @@ class LoginResponseDTO(BaseModel):
     token_type: str
     access_token: str | None = None
     password_change_token: str | None = None
+    codigo_verificacion_requerido: bool = False
+    correo_enmascarado: str | None = None
 
 
 class OAuthTokenResponseDTO(BaseModel):
@@ -23,6 +25,11 @@ class OAuthTokenResponseDTO(BaseModel):
 
 
 class CambioPasswordInicialRequestDTO(BaseModel):
+    codigo_verificacion: str = Field(
+        min_length=6,
+        max_length=6,
+        pattern=r"^\d{6}$",
+    )
     nueva_password: str = Field(min_length=1)
     confirmar_password: str = Field(min_length=1)
 
@@ -56,7 +63,7 @@ class UsuarioCreateDTO(BaseModel):
     nombres: str = Field(min_length=1, max_length=150)
     apellidos: str = Field(min_length=1, max_length=150)
     correo: EmailStr
-    password_temporal: str = Field(min_length=1)
+    password_temporal: str = Field(min_length=1, max_length=30)
 
 
 class UsuarioResponseDTO(BaseModel):

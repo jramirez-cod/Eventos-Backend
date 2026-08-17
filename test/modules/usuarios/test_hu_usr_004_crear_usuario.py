@@ -22,7 +22,7 @@ def usuario_payload(id_rol: int) -> dict[str, object]:
         "nombres": "Maria",
         "apellidos": "Lopez",
         "correo": "mlopez@codip.pe",
-        "password_temporal": "Temporal1!",
+        "password_temporal": "74859632",
     }
 
 
@@ -64,8 +64,8 @@ async def test_administrador_con_permiso_puede_crear_usuario(
         )
         assert created is not None
         assert created.debe_cambiar_password is True
-        assert created.password_hash != "Temporal1!"
-        assert security.verify_password("Temporal1!", created.password_hash)
+        assert created.password_hash != "74859632"
+        assert security.verify_password("74859632", created.password_hash)
         audits = (
             await session.scalars(
                 select(Auditoria).where(Auditoria.accion == "CREACION_USUARIO")
@@ -74,7 +74,7 @@ async def test_administrador_con_permiso_puede_crear_usuario(
         assert len(audits) == 1
         audit_payload = str(audits[0].valor_nuevo).lower()
         assert "password_hash" not in audit_payload
-        assert "temporal1!" not in audit_payload
+        assert "74859632" not in audit_payload
 
 
 async def test_usuario_sin_permiso_recibe_403(client, session_factory) -> None:
@@ -142,7 +142,7 @@ async def test_rol_inexistente_recibe_404(client, session_factory) -> None:
     assert response.status_code == 404
 
 
-async def test_password_temporal_debe_cumplir_politica(
+async def test_password_temporal_debe_ser_dni_de_ocho_digitos(
     client,
     session_factory,
 ) -> None:
@@ -153,7 +153,7 @@ async def test_password_temporal_debe_cumplir_politica(
         headers = auth_header(admin)
 
     payload = usuario_payload(role.id_rol)
-    payload["password_temporal"] = "corta"
+    payload["password_temporal"] = "DNI-incorrecto"
     response = await client.post("/api/v1/usuarios", headers=headers, json=payload)
 
     assert response.status_code == 400

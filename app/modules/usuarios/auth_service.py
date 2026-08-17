@@ -23,6 +23,7 @@ RECOVERY_ACCEPTED_MESSAGE = (
 )
 
 PasswordRecoveryNotifier = Callable[[str, str], Awaitable[None]]
+InitialPasswordCodeNotifier = Callable[[str, str], Awaitable[None]]
 
 
 class AuthServiceError(Exception):
@@ -63,17 +64,36 @@ async def noop_password_recovery_notifier(_: str, __: str) -> None:
     """
 
 
+async def development_initial_password_code_notifier(
+    email: str,
+    code: str,
+) -> None:
+    """Muestra el código solo en desarrollo mientras no exista proveedor de correo."""
+    if not settings.app_debug:
+        return
+
+    masked_email = AuthService._mask_email(email)
+    print(
+        f"[DEV AUTH] Código de primer ingreso para {masked_email}: {code}",
+        flush=True,
+    )
+
+
 class AuthService:
     def __init__(
         self,
         db: AsyncSession,
         *,
         recovery_notifier: PasswordRecoveryNotifier = noop_password_recovery_notifier,
+        initial_password_notifier: InitialPasswordCodeNotifier = (
+            development_initial_password_code_notifier
+        ),
     ) -> None:
         self.db = db
         self.usuarios = UsuarioRepository(db)
         self.auditoria = AuditoriaRepository(db)
         self.recovery_notifier = recovery_notifier
+        self.initial_password_notifier = initial_password_notifier
 
     async def login(self, data: LoginRequestDTO) -> LoginResponseDTO:
         usuario = await self.usuarios.get_by_username(data.nombre_usuario)
@@ -87,10 +107,35 @@ class AuthService:
 
         if usuario.debe_cambiar_password:
             token = security.create_password_change_token(usuario.id_usuario)
+            token_payload = security.decode_password_change_token(token)
+            token_id = str(token_payload["jti"])
+            verification_code = security.generate_initial_verification_code()
+            code_hash = security.hash_initial_verification_code(
+                token_id=token_id,
+                code=verification_code,
+            )
+            expira_en = datetime.now(UTC) + timedelta(
+                minutes=settings.initial_password_code_expire_minutes
+            )
+
+            try:
+                await self.usuarios.create_recovery_token(
+                    usuario=usuario,
+                    token_hash=code_hash,
+                    expira_en=expira_en,
+                )
+                await self.db.commit()
+            except Exception:
+                await self.db.rollback()
+                raise
+
+            await self.initial_password_notifier(usuario.correo, verification_code)
             return LoginResponseDTO(
                 debe_cambiar_password=True,
                 token_type=security.PASSWORD_CHANGE_TOKEN_TYPE,
                 password_change_token=token,
+                codigo_verificacion_requerido=True,
+                correo_enmascarado=self._mask_email(usuario.correo),
             )
 
         await self.usuarios.update_last_login(usuario)
@@ -118,15 +163,32 @@ class AuthService:
 
         self._validate_password_policy(data.nueva_password)
 
-        usuario = await self._get_user_from_password_change_token(token)
-        if not usuario.estado or not usuario.debe_cambiar_password:
+        usuario, token_payload = await self._get_user_from_password_change_token(token)
+        token_id = token_payload.get("jti")
+        if not isinstance(token_id, str) or not token_id:
             raise InvalidPasswordChangeTokenError("Token inválido.")
+
+        code_hash = security.hash_initial_verification_code(
+            token_id=token_id,
+            code=data.codigo_verificacion,
+        )
+        verification_token = await self.usuarios.get_recovery_token_by_hash(code_hash)
+        if (
+            verification_token is None
+            or verification_token.id_usuario != usuario.id_usuario
+            or verification_token.utilizado_en is not None
+            or self._is_expired(verification_token.expira_en)
+            or not usuario.estado
+            or not usuario.debe_cambiar_password
+        ):
+            raise InvalidPasswordChangeTokenError("Token o código inválido.")
 
         try:
             await self.usuarios.update_password(
                 usuario, security.hash_password(data.nueva_password)
             )
             await self.usuarios.mark_initial_password_changed(usuario)
+            await self.usuarios.mark_recovery_token_used(verification_token)
             await self.usuarios.update_last_login(usuario)
             await self.auditoria.create(
                 id_usuario=usuario.id_usuario,
@@ -244,7 +306,9 @@ class AuthService:
             ),
         )
 
-    async def _get_user_from_password_change_token(self, token: str) -> Usuario:
+    async def _get_user_from_password_change_token(
+        self, token: str
+    ) -> tuple[Usuario, dict[str, object]]:
         try:
             payload = security.decode_password_change_token(token)
             id_usuario = int(payload["sub"])
@@ -254,7 +318,15 @@ class AuthService:
         usuario = await self.usuarios.get_by_id(id_usuario)
         if usuario is None:
             raise InvalidPasswordChangeTokenError("Token inválido.")
-        return usuario
+        return usuario, payload
+
+    @staticmethod
+    def _mask_email(email: str) -> str:
+        local_part, separator, domain = email.partition("@")
+        if not separator:
+            return "***"
+        visible = local_part[:1]
+        return f"{visible}{'*' * max(3, len(local_part) - 1)}@{domain}"
 
     @staticmethod
     def _validate_password_policy(password: str) -> None:
