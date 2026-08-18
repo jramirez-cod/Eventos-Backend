@@ -75,16 +75,16 @@ def validate_password_policy(password: str) -> None:
         raise PasswordPolicyError(errors)
 
 
-def validate_temporary_dni_password(password: str) -> None:
-    is_valid_dni = (
-        len(password) == settings.temporary_dni_length
-        and password.isascii()
-        and password.isdigit()
+def validate_document_number(numero_documento: str, *, longitud: int | None = None) -> None:
+    expected_length = longitud or settings.temporary_dni_length
+    is_valid = (
+        len(numero_documento) == expected_length
+        and numero_documento.isascii()
+        and numero_documento.isdigit()
     )
-    if not is_valid_dni:
+    if not is_valid:
         raise TemporaryPasswordPolicyError(
-            "La contraseña temporal debe ser un DNI de "
-            f"{settings.temporary_dni_length} dígitos."
+            f"El número de documento debe tener {expected_length} dígitos."
         )
 
 
@@ -115,6 +115,8 @@ def create_access_token(
     nombre_usuario: str = "",
     nombres: str = "",
     apellidos: str = "",
+    correo: str = "",
+    nombre_rol: str = "",
 ) -> str:
     return _create_token(
         subject=id_usuario,
@@ -126,6 +128,8 @@ def create_access_token(
             "nombre_usuario": nombre_usuario,
             "nombres": nombres,
             "apellidos": apellidos,
+            "correo": correo,
+            "nombre_rol": nombre_rol,
         },
     )
 
@@ -167,10 +171,6 @@ def decode_password_change_token(token: str) -> dict[str, Any]:
     return decode_token(token, PASSWORD_CHANGE_TOKEN_TYPE)
 
 
-def generate_recovery_token() -> str:
-    return secrets.token_urlsafe(48)
-
-
 def generate_initial_verification_code() -> str:
     length = settings.initial_password_code_length
     return f"{secrets.randbelow(10**length):0{length}d}"
@@ -189,5 +189,5 @@ def hash_initial_verification_code(*, token_id: str, code: str) -> str:
     return hash_recovery_token(f"initial_password:{token_id}:{code}")
 
 
-def recovery_token_matches(token: str, token_hash: str) -> bool:
-    return hmac.compare_digest(hash_recovery_token(token), token_hash)
+def hash_recovery_code(*, correo: str, code: str) -> str:
+    return hash_recovery_token(f"password_recovery:{correo.lower()}:{code}")

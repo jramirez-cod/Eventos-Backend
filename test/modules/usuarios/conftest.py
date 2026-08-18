@@ -1,5 +1,6 @@
 from collections.abc import AsyncGenerator
 from datetime import UTC, datetime, timedelta
+from itertools import count
 import os
 from uuid import uuid4
 
@@ -26,6 +27,7 @@ from app.modules.usuarios.models import (  # noqa: E402
     Permiso,
     Rol,
     RolPermisoModulo,
+    TipoDocumento,
     Usuario,
     UsuarioTokenRecuperacion,
 )
@@ -33,6 +35,12 @@ from app.modules.usuarios.models import (  # noqa: E402
 
 VALID_PASSWORD = "Password1!"
 NEW_PASSWORD = "NuevaPass1!"
+
+_numero_documento_seq = count(10_000_001)
+
+
+def _next_numero_documento() -> str:
+    return str(next(_numero_documento_seq))
 
 
 @pytest_asyncio.fixture()
@@ -98,6 +106,21 @@ async def create_role(
     return rol
 
 
+async def create_tipo_documento(
+    session: AsyncSession,
+    *,
+    nombre_documento: str = "DNI",
+    longitud: int | None = 8,
+    estado: bool = True,
+) -> TipoDocumento:
+    tipo_documento = TipoDocumento(
+        nombre_documento=nombre_documento, longitud=longitud, estado=estado
+    )
+    session.add(tipo_documento)
+    await session.flush()
+    return tipo_documento
+
+
 async def create_user(
     session: AsyncSession,
     rol: Rol,
@@ -107,9 +130,15 @@ async def create_user(
     password: str = VALID_PASSWORD,
     estado: bool = True,
     debe_cambiar_password: bool = False,
+    tipo_documento: TipoDocumento | None = None,
+    numero_documento: str | None = None,
 ) -> Usuario:
+    if tipo_documento is None:
+        tipo_documento = await create_tipo_documento(session)
     usuario = Usuario(
         id_rol=rol.id_rol,
+        id_tipo_documento=tipo_documento.id_tipo_documento,
+        numero_documento=numero_documento or _next_numero_documento(),
         nombre_usuario=username,
         password_hash=security.hash_password(password),
         nombres="Juan",
@@ -228,6 +257,7 @@ def access_token(usuario: Usuario) -> str:
         usuario.nombre_usuario,
         usuario.nombres,
         usuario.apellidos,
+        usuario.correo,
     )
 
 
@@ -244,6 +274,7 @@ __all__ = [
     "create_recovery_token",
     "create_initial_password_challenge",
     "create_role",
+    "create_tipo_documento",
     "create_user",
     "seed_admin_with_permissions",
 ]

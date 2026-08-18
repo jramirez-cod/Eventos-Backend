@@ -19,6 +19,7 @@ from test.modules.usuarios.conftest import (
     NEW_PASSWORD,
     auth_header,
     create_role,
+    create_tipo_documento,
     create_user,
     seed_admin_with_permissions,
 )
@@ -44,20 +45,23 @@ async def test_flujo_completo_admin_dni_codigo_password_y_login_normal(
     async with session_factory() as session:
         _, admin = await seed_admin_with_permissions(session)
         user_role = await create_role(session, "Operador")
+        tipo_documento = await create_tipo_documento(session)
         await session.commit()
         admin_headers = auth_header(admin)
         role_id = user_role.id_rol
+        tipo_documento_id = tipo_documento.id_tipo_documento
 
     create_response = await client.post(
         "/api/v1/usuarios",
         headers=admin_headers,
         json={
             "id_rol": role_id,
+            "id_tipo_documento": tipo_documento_id,
+            "numero_documento": DNI_TEMPORAL,
             "nombre_usuario": "DylanCodip",
             "nombres": "Dylan",
             "apellidos": "Codip",
             "correo": "dylan@codip.pe",
-            "password_temporal": DNI_TEMPORAL,
         },
     )
 

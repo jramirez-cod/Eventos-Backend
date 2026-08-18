@@ -15,11 +15,19 @@ class RolNotFoundError(UsuarioServiceError):
     pass
 
 
+class TipoDocumentoNotFoundError(UsuarioServiceError):
+    pass
+
+
 class DuplicateUsernameError(UsuarioServiceError):
     pass
 
 
 class DuplicateEmailError(UsuarioServiceError):
+    pass
+
+
+class DuplicateDocumentoError(UsuarioServiceError):
     pass
 
 
@@ -44,22 +52,31 @@ class UsuarioService:
         if rol is None or not rol.estado:
             raise RolNotFoundError("Rol no encontrado.")
 
+        tipo_documento = await self.usuarios.get_tipo_documento(data.id_tipo_documento)
+        if tipo_documento is None or not tipo_documento.estado:
+            raise TipoDocumentoNotFoundError("Tipo de documento no encontrado.")
+
         if await self.usuarios.get_by_username(data.nombre_usuario):
             raise DuplicateUsernameError("Nombre de usuario ya existe.")
 
         if await self.usuarios.get_by_email(str(data.correo)):
             raise DuplicateEmailError("Correo ya existe.")
 
-        self._validate_temporary_password(data.password_temporal)
+        if await self.usuarios.get_by_numero_documento(data.numero_documento):
+            raise DuplicateDocumentoError("Número de documento ya existe.")
+
+        self._validate_numero_documento(data.numero_documento, tipo_documento.longitud)
 
         try:
             usuario = await self.usuarios.create_user(
                 id_rol=data.id_rol,
+                id_tipo_documento=data.id_tipo_documento,
+                numero_documento=data.numero_documento,
                 nombre_usuario=data.nombre_usuario,
                 nombres=data.nombres,
                 apellidos=data.apellidos,
                 correo=str(data.correo),
-                password_hash=security.hash_password(data.password_temporal),
+                password_hash=security.hash_password(data.numero_documento),
                 estado=True,
                 debe_cambiar_password=True,
             )
@@ -73,6 +90,8 @@ class UsuarioService:
                     "nombre_usuario": usuario.nombre_usuario,
                     "correo": usuario.correo,
                     "id_rol": usuario.id_rol,
+                    "id_tipo_documento": usuario.id_tipo_documento,
+                    "numero_documento": usuario.numero_documento,
                     "estado": usuario.estado,
                     "debe_cambiar_password": usuario.debe_cambiar_password,
                 },
@@ -134,8 +153,8 @@ class UsuarioService:
             raise
 
     @staticmethod
-    def _validate_temporary_password(password: str) -> None:
+    def _validate_numero_documento(numero_documento: str, longitud: int | None) -> None:
         try:
-            security.validate_temporary_dni_password(password)
+            security.validate_document_number(numero_documento, longitud=longitud)
         except security.TemporaryPasswordPolicyError as exc:
             raise PasswordPolicyViolationError([str(exc)]) from exc

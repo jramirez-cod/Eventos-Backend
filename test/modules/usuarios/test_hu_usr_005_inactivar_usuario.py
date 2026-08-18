@@ -131,11 +131,12 @@ async def test_jwt_anterior_deja_de_funcionar_despues_de_inactivacion(
         headers=old_headers,
         json={
             "id_rol": role_id,
+            "id_tipo_documento": 1,
+            "numero_documento": "74859632",
             "nombre_usuario": "intento",
             "nombres": "Intento",
             "apellidos": "Fallido",
             "correo": "intento@codip.pe",
-            "password_temporal": "74859632",
         },
     )
 

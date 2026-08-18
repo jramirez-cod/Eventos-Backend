@@ -43,7 +43,12 @@ class RecuperarPasswordResponseDTO(BaseModel):
 
 
 class RestablecerPasswordRequestDTO(BaseModel):
-    token: str = Field(min_length=1)
+    correo: EmailStr
+    codigo_verificacion: str = Field(
+        min_length=6,
+        max_length=6,
+        pattern=r"^\d{6}$",
+    )
     nueva_password: str = Field(min_length=1)
     confirmar_password: str = Field(min_length=1)
 
@@ -57,13 +62,23 @@ class RolResponseDTO(BaseModel):
     estado: bool
 
 
+class TipoDocumentoResponseDTO(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id_tipo_documento: int
+    nombre_documento: str
+    longitud: int | None = None
+    estado: bool
+
+
 class UsuarioCreateDTO(BaseModel):
     id_rol: int
+    id_tipo_documento: int
+    numero_documento: str = Field(min_length=1, max_length=50)
     nombre_usuario: str = Field(min_length=1, max_length=80)
     nombres: str = Field(min_length=1, max_length=150)
     apellidos: str = Field(min_length=1, max_length=150)
     correo: EmailStr
-    password_temporal: str = Field(min_length=1, max_length=30)
 
 
 class UsuarioResponseDTO(BaseModel):
@@ -76,19 +91,31 @@ class UsuarioResponseDTO(BaseModel):
     correo: EmailStr
     id_rol: int
     nombre_rol: str = ""
+    id_tipo_documento: int
+    nombre_documento: str = ""
+    numero_documento: str
     estado: bool
     debe_cambiar_password: bool
 
     @model_validator(mode="before")
     @classmethod
-    def extract_nombre_rol(cls, data: Any) -> Any:
+    def extract_relaciones(cls, data: Any) -> Any:
         rol_is_loaded = False
+        tipo_documento_is_loaded = False
         try:
-            rol_is_loaded = "rol" not in sqlalchemy_inspect(data).unloaded
+            unloaded = sqlalchemy_inspect(data).unloaded
+            rol_is_loaded = "rol" not in unloaded
+            tipo_documento_is_loaded = "tipo_documento" not in unloaded
         except NoInspectionAvailable:
             rol_is_loaded = hasattr(data, "rol")
+            tipo_documento_is_loaded = hasattr(data, "tipo_documento")
 
-        if rol_is_loaded and getattr(data, "rol", None) is not None:
+        rol_cargado = rol_is_loaded and getattr(data, "rol", None) is not None
+        tipo_documento_cargado = (
+            tipo_documento_is_loaded and getattr(data, "tipo_documento", None) is not None
+        )
+
+        if rol_cargado or tipo_documento_cargado:
             return {
                 "id_usuario": data.id_usuario,
                 "nombre_usuario": data.nombre_usuario,
@@ -96,7 +123,12 @@ class UsuarioResponseDTO(BaseModel):
                 "apellidos": data.apellidos,
                 "correo": data.correo,
                 "id_rol": data.id_rol,
-                "nombre_rol": data.rol.nombre_rol,
+                "nombre_rol": data.rol.nombre_rol if rol_cargado else "",
+                "id_tipo_documento": data.id_tipo_documento,
+                "nombre_documento": (
+                    data.tipo_documento.nombre_documento if tipo_documento_cargado else ""
+                ),
+                "numero_documento": data.numero_documento,
                 "estado": data.estado,
                 "debe_cambiar_password": data.debe_cambiar_password,
             }

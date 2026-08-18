@@ -135,7 +135,13 @@ async def recuperar_password(
     data: RecuperarPasswordRequestDTO,
     db: AsyncSession = Depends(get_db),
 ) -> RecuperarPasswordResponseDTO:
-    return await AuthService(db).solicitar_recuperacion(data)
+    try:
+        return await AuthService(db).solicitar_recuperacion(data)
+    except VerificationEmailDeliveryError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="No se pudo enviar el código de verificación.",
+        )
 
 
 @router.post("/restablecer-password", response_model=LoginResponseDTO)

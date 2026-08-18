@@ -9,7 +9,6 @@ from app.modules.usuarios.models import Usuario, UsuarioTokenRecuperacion
 from test.modules.usuarios.conftest import (
     NEW_PASSWORD,
     VALID_PASSWORD,
-    create_recovery_token,
     create_role,
     create_user,
 )
@@ -17,11 +16,19 @@ from test.modules.usuarios.conftest import (
 
 pytestmark = pytest.mark.asyncio
 
+CODIGO_VERIFICACION = "482913"
 
-async def test_solicitud_recuperacion_correo_existente_crea_token_hash(
+
+def _patch_codigo(monkeypatch: pytest.MonkeyPatch, codigo: str = CODIGO_VERIFICACION) -> None:
+    monkeypatch.setattr(security, "generate_initial_verification_code", lambda: codigo)
+
+
+async def test_solicitud_recuperacion_correo_existente_crea_codigo_hash(
     client,
     session_factory,
+    monkeypatch,
 ) -> None:
+    _patch_codigo(monkeypatch)
     async with session_factory() as session:
         rol = await create_role(session, "Operador")
         await create_user(session, rol, username="jperez", email="jperez@codip.pe")
@@ -37,7 +44,7 @@ async def test_solicitud_recuperacion_correo_existente_crea_token_hash(
         tokens = (await session.scalars(select(UsuarioTokenRecuperacion))).all()
         assert len(tokens) == 1
         assert tokens[0].token_hash
-        assert "recovery" not in tokens[0].token_hash
+        assert CODIGO_VERIFICACION not in tokens[0].token_hash
 
 
 async def test_solicitud_recuperacion_correo_inexistente_devuelve_misma_respuesta(
@@ -63,28 +70,36 @@ async def test_solicitud_recuperacion_correo_inexistente_devuelve_misma_respuest
     assert existing.json() == missing.json()
 
 
-async def test_restablecer_password_token_valido_actualiza_y_audita(
+async def test_restablecer_password_codigo_valido_actualiza_y_audita(
     client,
     session_factory,
+    monkeypatch,
 ) -> None:
-    token = "token-recuperacion-valido"
+    _patch_codigo(monkeypatch)
     async with session_factory() as session:
         rol = await create_role(session, "Operador")
         usuario = await create_user(
             session,
             rol,
             username="jperez",
+            email="jperez@codip.pe",
             password=VALID_PASSWORD,
             debe_cambiar_password=True,
         )
-        await create_recovery_token(session, usuario, token=token)
         await session.commit()
         user_id = usuario.id_usuario
+
+    solicitud = await client.post(
+        "/api/v1/auth/recuperar-password",
+        json={"correo": "jperez@codip.pe"},
+    )
+    assert solicitud.status_code == 200
 
     response = await client.post(
         "/api/v1/auth/restablecer-password",
         json={
-            "token": token,
+            "correo": "jperez@codip.pe",
+            "codigo_verificacion": CODIGO_VERIFICACION,
             "nueva_password": NEW_PASSWORD,
             "confirmar_password": NEW_PASSWORD,
         },
@@ -100,7 +115,9 @@ async def test_restablecer_password_token_valido_actualiza_y_audita(
         stored_token = await session.scalar(
             select(UsuarioTokenRecuperacion).where(
                 UsuarioTokenRecuperacion.token_hash
-                == security.hash_recovery_token(token)
+                == security.hash_recovery_code(
+                    correo="jperez@codip.pe", code=CODIGO_VERIFICACION
+                )
             )
         )
         assert stored_token.utilizado_en is not None
@@ -112,50 +129,49 @@ async def test_restablecer_password_token_valido_actualiza_y_audita(
             )
         ).all()
         assert len(audits) == 1
-        assert "token" not in str(audits[0].valor_nuevo).lower()
+        audit_payload = str(audits[0].valor_nuevo).lower()
+        assert CODIGO_VERIFICACION not in audit_payload
+        assert NEW_PASSWORD.lower() not in audit_payload
 
 
 @pytest.mark.parametrize(
-    ("token", "expira_en", "utilizado_en", "expected_token"),
+    ("mutar_expirado", "mutar_usado"),
     [
-        (
-            "expirado",
-            datetime.now(UTC) - timedelta(minutes=1),
-            None,
-            "expirado",
-        ),
-        (
-            "usado",
-            datetime.now(UTC) + timedelta(minutes=30),
-            datetime.now(UTC),
-            "usado",
-        ),
+        (True, False),
+        (False, True),
     ],
 )
-async def test_restablecer_password_rechaza_token_expirado_o_usado(
+async def test_restablecer_password_rechaza_codigo_expirado_o_usado(
     client,
     session_factory,
-    token,
-    expira_en,
-    utilizado_en,
-    expected_token,
+    monkeypatch,
+    mutar_expirado,
+    mutar_usado,
 ) -> None:
+    _patch_codigo(monkeypatch)
     async with session_factory() as session:
         rol = await create_role(session, "Operador")
-        usuario = await create_user(session, rol, username=f"user-{token}")
-        await create_recovery_token(
-            session,
-            usuario,
-            token=token,
-            expira_en=expira_en,
-            utilizado_en=utilizado_en,
-        )
+        await create_user(session, rol, username="jperez", email="jperez@codip.pe")
+        await session.commit()
+
+    await client.post(
+        "/api/v1/auth/recuperar-password",
+        json={"correo": "jperez@codip.pe"},
+    )
+
+    async with session_factory() as session:
+        stored_token = await session.scalar(select(UsuarioTokenRecuperacion))
+        if mutar_expirado:
+            stored_token.expira_en = datetime.now(UTC) - timedelta(minutes=1)
+        if mutar_usado:
+            stored_token.utilizado_en = datetime.now(UTC)
         await session.commit()
 
     response = await client.post(
         "/api/v1/auth/restablecer-password",
         json={
-            "token": expected_token,
+            "correo": "jperez@codip.pe",
+            "codigo_verificacion": CODIGO_VERIFICACION,
             "nueva_password": NEW_PASSWORD,
             "confirmar_password": NEW_PASSWORD,
         },
@@ -164,11 +180,17 @@ async def test_restablecer_password_rechaza_token_expirado_o_usado(
     assert response.status_code == 401
 
 
-async def test_restablecer_password_token_invalido(client) -> None:
+async def test_restablecer_password_codigo_invalido(client, session_factory) -> None:
+    async with session_factory() as session:
+        rol = await create_role(session, "Operador")
+        await create_user(session, rol, username="jperez", email="jperez@codip.pe")
+        await session.commit()
+
     response = await client.post(
         "/api/v1/auth/restablecer-password",
         json={
-            "token": "token-que-no-existe",
+            "correo": "jperez@codip.pe",
+            "codigo_verificacion": "000000",
             "nueva_password": NEW_PASSWORD,
             "confirmar_password": NEW_PASSWORD,
         },
@@ -177,32 +199,46 @@ async def test_restablecer_password_token_invalido(client) -> None:
     assert response.status_code == 401
 
 
-async def test_restablecer_password_no_reutiliza_token(
-    client,
-    session_factory,
-) -> None:
-    token = "token-un-solo-uso"
-    async with session_factory() as session:
-        rol = await create_role(session, "Operador")
-        usuario = await create_user(session, rol, username="jperez")
-        await create_recovery_token(session, usuario, token=token)
-        await session.commit()
-
-    first = await client.post(
+async def test_restablecer_password_correo_inexistente_recibe_401(client) -> None:
+    response = await client.post(
         "/api/v1/auth/restablecer-password",
         json={
-            "token": token,
+            "correo": "nadie@codip.pe",
+            "codigo_verificacion": "000000",
             "nueva_password": NEW_PASSWORD,
             "confirmar_password": NEW_PASSWORD,
         },
     )
+
+    assert response.status_code == 401
+
+
+async def test_restablecer_password_no_reutiliza_codigo(
+    client,
+    session_factory,
+    monkeypatch,
+) -> None:
+    _patch_codigo(monkeypatch)
+    async with session_factory() as session:
+        rol = await create_role(session, "Operador")
+        await create_user(session, rol, username="jperez", email="jperez@codip.pe")
+        await session.commit()
+
+    await client.post(
+        "/api/v1/auth/recuperar-password",
+        json={"correo": "jperez@codip.pe"},
+    )
+
+    payload = {
+        "correo": "jperez@codip.pe",
+        "codigo_verificacion": CODIGO_VERIFICACION,
+        "nueva_password": NEW_PASSWORD,
+        "confirmar_password": NEW_PASSWORD,
+    }
+    first = await client.post("/api/v1/auth/restablecer-password", json=payload)
     second = await client.post(
         "/api/v1/auth/restablecer-password",
-        json={
-            "token": token,
-            "nueva_password": "OtraNueva1!",
-            "confirmar_password": "OtraNueva1!",
-        },
+        json={**payload, "nueva_password": "OtraNueva1!", "confirmar_password": "OtraNueva1!"},
     )
 
     assert first.status_code == 200
@@ -212,25 +248,36 @@ async def test_restablecer_password_no_reutiliza_token(
 async def test_restablecer_password_valida_confirmacion_y_politica(
     client,
     session_factory,
+    monkeypatch,
 ) -> None:
-    token = "token-policy"
+    _patch_codigo(monkeypatch)
     async with session_factory() as session:
         rol = await create_role(session, "Operador")
-        usuario = await create_user(session, rol, username="jperez")
-        await create_recovery_token(session, usuario, token=token)
+        await create_user(session, rol, username="jperez", email="jperez@codip.pe")
         await session.commit()
+
+    await client.post(
+        "/api/v1/auth/recuperar-password",
+        json={"correo": "jperez@codip.pe"},
+    )
 
     mismatch = await client.post(
         "/api/v1/auth/restablecer-password",
         json={
-            "token": token,
+            "correo": "jperez@codip.pe",
+            "codigo_verificacion": CODIGO_VERIFICACION,
             "nueva_password": NEW_PASSWORD,
             "confirmar_password": "OtraNueva1!",
         },
     )
     weak = await client.post(
         "/api/v1/auth/restablecer-password",
-        json={"token": token, "nueva_password": "corta", "confirmar_password": "corta"},
+        json={
+            "correo": "jperez@codip.pe",
+            "codigo_verificacion": CODIGO_VERIFICACION,
+            "nueva_password": "corta",
+            "confirmar_password": "corta",
+        },
     )
 
     assert mismatch.status_code == 400

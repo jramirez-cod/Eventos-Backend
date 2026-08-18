@@ -52,23 +52,33 @@ PASSWORD_REQUIRE_UPPERCASE=true
 PASSWORD_REQUIRE_LOWERCASE=true
 PASSWORD_REQUIRE_NUMBER=true
 PASSWORD_REQUIRE_SPECIAL=true
+
+EMAIL_ENABLED=false
+EMAIL_PRINT_CODE_TO_CONSOLE=false
+EMAIL_SENDER_USER_ID=1
+EMAIL_FROM_NAME=Sistema Eventos CODIP
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_STARTTLS=true
+SMTP_APP_PASSWORD=...
 ```
 
 `SECRET_KEY` es obligatorio para login, JWT, cambio de contraseña y recuperación. No debe subirse al repositorio.
 
-Mientras no exista un proveedor de correo, en desarrollo puede mostrarse el código de primer ingreso en la consola del servidor:
+`EMAIL_ENABLED` controla si se intenta un envío SMTP real (usando `SMTP_*` y el correo del usuario `EMAIL_SENDER_USER_ID` como remitente) tanto para el código de primer ingreso (HU-USR-002) como para el de recuperación de contraseña (HU-USR-003). `EMAIL_PRINT_CODE_TO_CONSOLE` es un flag independiente (no `APP_DEBUG`) que además imprime el código en la consola del servidor — útil en desarrollo cuando no hay SMTP configurado, o como respaldo si el envío real falla:
 
 ```env
-APP_DEBUG=true
+EMAIL_PRINT_CODE_TO_CONSOLE=true
 ```
 
-Después de reiniciar FastAPI, un primer login válido mostrará algo similar a:
+Con ese flag activo, un login con contraseña temporal o una solicitud de recuperación mostrará algo similar a:
 
 ```text
 [DEV AUTH] Código de primer ingreso para a****@codip.pe: 482913
+[DEV AUTH] Código de recuperación de contraseña para a****@codip.pe: 482913
 ```
 
-Con `APP_DEBUG=false`, que es el valor predeterminado y el requerido en producción, el código nunca se imprime. Tampoco se imprimen contraseñas, JWT ni hashes.
+Con `EMAIL_PRINT_CODE_TO_CONSOLE=false` (valor predeterminado y el requerido en producción), el código nunca se imprime. Tampoco se imprimen contraseñas, JWT ni hashes.
 
 ## Ejecutar FastAPI
 
@@ -123,6 +133,9 @@ app/modules/usuarios/auth_router.py
 app/modules/usuarios/router.py
 app/modules/auditoria/models.py
 app/modules/auditoria/repository.py
+app/modules/comunicaciones/email_service.py
+app/modules/comunicaciones/templates/initial_password_code.html
+app/modules/comunicaciones/templates/password_recovery_code.html
 scripts/bootstrap_security.py
 ```
 
@@ -134,6 +147,7 @@ Los modelos representan tablas de PostgreSQL, no contratos HTTP.
 
 ```text
 Rol
+TipoDocumento
 Usuario
 UsuarioTokenRecuperacion
 Modulo
@@ -146,6 +160,8 @@ Campos relevantes de `Usuario`:
 ```text
 id_usuario
 id_rol
+id_tipo_documento
+numero_documento
 nombre_usuario
 password_hash
 nombres
@@ -153,9 +169,15 @@ apellidos
 correo
 estado
 debe_cambiar_password
-ultimo_acceso
-creado_en
-actualizado_en
+```
+
+Campos relevantes de `TipoDocumento`:
+
+```text
+id_tipo_documento
+nombre_documento
+longitud
+estado
 ```
 
 Campos relevantes de `UsuarioTokenRecuperacion`:
@@ -190,6 +212,7 @@ RecuperarPasswordResponseDTO
 RestablecerPasswordRequestDTO
 UsuarioCreateDTO
 UsuarioResponseDTO
+TipoDocumentoResponseDTO
 InactivarUsuarioDTO
 MessageResponseDTO
 ```
@@ -198,7 +221,6 @@ No se expone:
 
 ```text
 password_hash
-password_temporal
 token_hash
 ```
 
@@ -210,11 +232,14 @@ token_hash
 hash_password()
 verify_password()
 validate_password_policy()
+validate_document_number()
 create_access_token()
 decode_access_token()
 create_password_change_token()
 decode_password_change_token()
-generate_recovery_token()
+generate_initial_verification_code()
+hash_initial_verification_code()
+hash_recovery_code()
 hash_recovery_token()
 ```
 
@@ -226,6 +251,20 @@ token_type=password_change
 ```
 
 Un token `password_change` no sirve para endpoints protegidos normales.
+
+Un `access_token` incluye estos claims (además de `sub`, `iss`, `iat`, `exp`, `token_type`):
+
+```text
+id_usuario
+id_rol
+nombre_usuario
+nombres
+apellidos
+correo
+nombre_rol
+```
+
+`correo` y `nombre_rol` se agregaron para que el frontend pueda hidratar la sesión (dashboard, sidebar) sin depender de un endpoint adicional. Se resuelven con `usuario.rol.nombre_rol`, por lo que `UsuarioRepository.get_by_username()`/`get_by_email()` cargan la relación `rol` con `joinedload`.
 
 Cada endpoint protegido usa `get_current_user()`, que valida en base de datos que el usuario todavía exista y siga activo. Si un usuario fue inactivado después de iniciar sesión, su JWT anterior queda rechazado.
 
@@ -241,6 +280,7 @@ El script es idempotente y prepara:
 
 ```text
 roles básicos
+tipo de documento DNI (longitud 8)
 módulo USUARIOS
 permisos CREAR_USUARIO e INACTIVAR_USUARIO
 relaciones rol-permiso-módulo
@@ -256,6 +296,7 @@ BOOTSTRAP_ADMIN_EMAIL='admin@codip.pe' \
 BOOTSTRAP_ADMIN_PASSWORD='AdminSeguro1!' \
 BOOTSTRAP_ADMIN_NOMBRES='Administrador' \
 BOOTSTRAP_ADMIN_APELLIDOS='Eventos' \
+BOOTSTRAP_ADMIN_DOCUMENTO='00000000' \
 .venv/bin/python scripts/bootstrap_security.py
 ```
 
@@ -419,7 +460,7 @@ JSON:
 }
 ```
 
-Respuesta satisfactoria, exista o no exista el correo:
+Respuesta satisfactoria, exista o no exista el correo (mensaje idéntico en ambos casos, para no revelar qué correos tienen cuenta):
 
 ```json
 {
@@ -427,7 +468,9 @@ Respuesta satisfactoria, exista o no exista el correo:
 }
 ```
 
-Actualmente no hay módulo de comunicaciones conectado. El código deja preparado el punto de integración para enviar el token/link por correo sin registrar el token completo.
+Sigue la misma lógica que HU-USR-002: si el correo tiene una cuenta activa, se genera un código de 6 dígitos (`security.generate_initial_verification_code()`), se guarda su hash anclado al correo (`security.hash_recovery_code()`, no a un JWT, porque en este flujo el usuario todavía no probó ninguna credencial) y se envía por correo con `notify_password_recovery_code()` (plantilla `password_recovery_code.html`). Si el correo no existe o está inactivo, la función retorna sin generar ni enviar nada — confirmable revisando que no aparezcan filas nuevas en `usuario_token_recuperacion`.
+
+Si el envío de correo falla (por ejemplo, SMTP no disponible) y no hay respaldo de consola habilitado, responde `503`.
 
 ### 5. Restablecer contraseña
 
@@ -441,7 +484,8 @@ JSON:
 
 ```json
 {
-  "token": "token-recibido-por-correo",
+  "correo": "mlopez@codip.pe",
+  "codigo_verificacion": "482913",
   "nueva_password": "PasswordRecuperada1!",
   "confirmar_password": "PasswordRecuperada1!"
 }
@@ -458,7 +502,7 @@ Respuesta satisfactoria:
 }
 ```
 
-El token queda marcado como utilizado y no puede reutilizarse.
+No requiere header `Authorization`: el `correo` identifica al usuario y el `codigo_verificacion` se valida contra el hash guardado para ese correo. El código queda marcado como utilizado y no puede reutilizarse; expira según `RECOVERY_TOKEN_EXPIRE_MINUTES`.
 
 ### 6. Crear usuario interno
 
@@ -485,11 +529,12 @@ JSON:
 ```json
 {
   "id_rol": 2,
+  "id_tipo_documento": 1,
+  "numero_documento": "74859632",
   "nombre_usuario": "mlopez",
   "nombres": "María",
   "apellidos": "López",
-  "correo": "mlopez@codip.pe",
-  "password_temporal": "74859632"
+  "correo": "mlopez@codip.pe"
 }
 ```
 
@@ -503,12 +548,16 @@ Respuesta satisfactoria:
   "apellidos": "López",
   "correo": "mlopez@codip.pe",
   "id_rol": 2,
+  "nombre_rol": "Operador",
+  "id_tipo_documento": 1,
+  "nombre_documento": "DNI",
+  "numero_documento": "74859632",
   "estado": true,
   "debe_cambiar_password": true
 }
 ```
 
-La contraseña temporal corresponde al DNI de ocho dígitos. Se guarda como hash y no se retorna.
+`numero_documento` se usa como contraseña temporal (se guarda como hash en `password_hash`) y además queda persistido/visible como dato propio del usuario. Su longitud esperada depende del `TipoDocumento` seleccionado (por defecto, DNI de ocho dígitos).
 
 Errores comunes:
 
@@ -525,15 +574,16 @@ curl -X POST 'http://127.0.0.1:8000/api/v1/usuarios' \
   -H 'Authorization: Bearer eyJ...access_token...' \
   -d '{
     "id_rol": 2,
+    "id_tipo_documento": 1,
+    "numero_documento": "74859632",
     "nombre_usuario": "adminEvento",
     "nombres": "Admin",
     "apellidos": "Evento",
-    "correo": "adminEvento@codip.pe",
-    "password_temporal": "74859632"
+    "correo": "adminEvento@codip.pe"
   }'
 ```
 
-También fallará si la contraseña temporal no contiene exactamente ocho dígitos. La política fuerte se aplica a la nueva contraseña definitiva.
+También fallará si `numero_documento` no contiene exactamente la longitud esperada por el tipo de documento seleccionado. La política fuerte se aplica a la nueva contraseña definitiva.
 
 ### 7. Inactivar usuario
 
@@ -660,15 +710,14 @@ auditoría generada
 HU-USR-003:
 
 ```text
-solicitud con correo existente
-solicitud con correo inexistente devuelve misma respuesta
-token válido
-token expirado
-token usado
-token inválido
-token no reutilizable
-cambio correcto
-auditoría
+solicitud con correo existente crea código hasheado
+solicitud con correo inexistente devuelve misma respuesta (sin crear código)
+código válido actualiza contraseña y audita
+código expirado o usado es rechazado
+código inválido es rechazado
+correo sin cuenta asociada es rechazado
+código no reutilizable
+confirmación y política de contraseña validadas
 ```
 
 HU-USR-004:
@@ -679,10 +728,13 @@ usuario sin permiso recibe 403
 username duplicado
 correo duplicado
 rol inexistente
+tipo de documento inexistente
+número de documento con longitud inválida para el tipo de documento
+número de documento duplicado
 creación correcta
 debe_cambiar_password=true
-password almacenado como hash
-auditoría
+password derivado del número de documento y almacenado como hash
+auditoría (incluye número de documento, ya no es un dato secreto)
 ```
 
 HU-USR-005:
@@ -706,5 +758,5 @@ JWT anterior deja de funcionar después de la inactivación
 Resultado esperado con PostgreSQL disponible:
 
 ```text
-36 passed
+42 passed
 ```

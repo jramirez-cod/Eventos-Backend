@@ -9,8 +9,10 @@ from app.modules.auditoria.repository import AuditoriaRepository
 from app.modules.comunicaciones.email_service import (
     EmailDeliveryError,
     InitialPasswordEmail,
+    PasswordRecoveryEmail,
     mask_email,
     notify_initial_password_code,
+    notify_password_recovery_code,
 )
 from app.modules.usuarios.dto import (
     CambioPasswordInicialRequestDTO,
@@ -28,7 +30,7 @@ RECOVERY_ACCEPTED_MESSAGE = (
     "Si existe una cuenta asociada, se enviarán las instrucciones de recuperación."
 )
 
-PasswordRecoveryNotifier = Callable[[str, str], Awaitable[None]]
+PasswordRecoveryNotifier = Callable[[PasswordRecoveryEmail], Awaitable[None]]
 InitialPasswordCodeNotifier = Callable[[InitialPasswordEmail], Awaitable[None]]
 
 
@@ -66,20 +68,12 @@ class VerificationEmailDeliveryError(AuthServiceError):
     pass
 
 
-async def noop_password_recovery_notifier(_: str, __: str) -> None:
-    """
-    Punto de integración para el futuro módulo comunicaciones.
-
-    Recibe correo y token en claro, pero no lo registra ni lo persiste.
-    """
-
-
 class AuthService:
     def __init__(
         self,
         db: AsyncSession,
         *,
-        recovery_notifier: PasswordRecoveryNotifier = noop_password_recovery_notifier,
+        recovery_notifier: PasswordRecoveryNotifier = notify_password_recovery_code,
         initial_password_notifier: InitialPasswordCodeNotifier = (
             notify_initial_password_code
         ),
@@ -157,7 +151,6 @@ class AuthService:
                 correo_enmascarado=mask_email(usuario.correo),
             )
 
-        await self.usuarios.update_last_login(usuario)
         await self.db.commit()
         return LoginResponseDTO(
             debe_cambiar_password=False,
@@ -168,6 +161,8 @@ class AuthService:
                 usuario.nombre_usuario,
                 usuario.nombres,
                 usuario.apellidos,
+                usuario.correo,
+                usuario.rol.nombre_rol,
             ),
         )
 
@@ -208,7 +203,6 @@ class AuthService:
             )
             await self.usuarios.mark_initial_password_changed(usuario)
             await self.usuarios.mark_recovery_token_used(verification_token)
-            await self.usuarios.update_last_login(usuario)
             await self.auditoria.create(
                 id_usuario=usuario.id_usuario,
                 entidad="usuario",
@@ -231,6 +225,8 @@ class AuthService:
                 usuario.nombre_usuario,
                 usuario.nombres,
                 usuario.apellidos,
+                usuario.correo,
+                usuario.rol.nombre_rol,
             ),
         )
 
@@ -243,8 +239,11 @@ class AuthService:
         if usuario is None or not usuario.estado:
             return response
 
-        token = security.generate_recovery_token()
-        token_hash = security.hash_recovery_token(token)
+        sender_email = await self._get_sender_email()
+        verification_code = security.generate_initial_verification_code()
+        code_hash = security.hash_recovery_code(
+            correo=usuario.correo, code=verification_code
+        )
         expira_en = datetime.now(UTC) + timedelta(
             minutes=settings.recovery_token_expire_minutes
         )
@@ -252,7 +251,7 @@ class AuthService:
         try:
             stored_token = await self.usuarios.create_recovery_token(
                 usuario=usuario,
-                token_hash=token_hash,
+                token_hash=code_hash,
                 expira_en=expira_en,
             )
             await self.db.commit()
@@ -260,8 +259,26 @@ class AuthService:
             await self.db.rollback()
             raise
 
-        if stored_token is not None:
-            await self.recovery_notifier(usuario.correo, token)
+        try:
+            await self.recovery_notifier(
+                PasswordRecoveryEmail(
+                    sender_email=sender_email,
+                    recipient_email=usuario.correo,
+                    recipient_name=f"{usuario.nombres} {usuario.apellidos}".strip(),
+                    code=verification_code,
+                    expires_minutes=settings.recovery_token_expire_minutes,
+                )
+            )
+        except EmailDeliveryError as exc:
+            try:
+                await self.usuarios.mark_recovery_token_used(stored_token)
+                await self.db.commit()
+            except Exception:
+                await self.db.rollback()
+            raise VerificationEmailDeliveryError(
+                "No se pudo enviar el código de verificación."
+            ) from exc
+
         return response
 
     async def restablecer_password(
@@ -272,19 +289,23 @@ class AuthService:
             raise PasswordMismatchError("Las contraseñas no coinciden.")
 
         self._validate_password_policy(data.nueva_password)
-        token_hash = security.hash_recovery_token(data.token)
-        recovery_token = await self.usuarios.get_recovery_token_by_hash(token_hash)
-        if recovery_token is None:
-            raise InvalidRecoveryTokenError("Token inválido.")
 
-        usuario = await self.usuarios.get_by_id(recovery_token.id_usuario)
+        usuario = await self.usuarios.get_by_email(str(data.correo))
+        if usuario is None:
+            raise InvalidRecoveryTokenError("Código inválido.")
+
+        code_hash = security.hash_recovery_code(
+            correo=usuario.correo, code=data.codigo_verificacion
+        )
+        recovery_token = await self.usuarios.get_recovery_token_by_hash(code_hash)
         if (
-            recovery_token.utilizado_en is not None
+            recovery_token is None
+            or recovery_token.id_usuario != usuario.id_usuario
+            or recovery_token.utilizado_en is not None
             or self._is_expired(recovery_token.expira_en)
-            or usuario is None
             or not usuario.estado
         ):
-            raise InvalidRecoveryTokenError("Token inválido.")
+            raise InvalidRecoveryTokenError("Código inválido.")
 
         try:
             debe_cambiar_password_anterior = usuario.debe_cambiar_password
@@ -294,7 +315,6 @@ class AuthService:
             if usuario.debe_cambiar_password:
                 await self.usuarios.mark_initial_password_changed(usuario)
             await self.usuarios.mark_recovery_token_used(recovery_token)
-            await self.usuarios.update_last_login(usuario)
             await self.auditoria.create(
                 id_usuario=usuario.id_usuario,
                 entidad="usuario",
@@ -322,6 +342,8 @@ class AuthService:
                 usuario.nombre_usuario,
                 usuario.nombres,
                 usuario.apellidos,
+                usuario.correo,
+                usuario.rol.nombre_rol,
             ),
         )
 

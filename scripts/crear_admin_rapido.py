@@ -17,7 +17,7 @@ if str(ROOT) not in sys.path:
 from sqlalchemy import select
 from app.core.security import hash_password
 from app.db.session import AsyncSessionLocal
-from app.modules.usuarios.models import Rol, Modulo, Permiso, RolPermisoModulo, Usuario
+from app.modules.usuarios.models import Rol, Modulo, Permiso, RolPermisoModulo, TipoDocumento, Usuario
 
 
 async def crear_admin():
@@ -38,6 +38,23 @@ async def crear_admin():
             print(f"✅ Rol creado: id={rol.id_rol}")
         else:
             print(f"ℹ️  Rol ya existe: id={rol.id_rol}")
+
+        # 1.5 Crear o obtener tipo de documento DNI
+        tipo_documento = await session.scalar(
+            select(TipoDocumento).where(TipoDocumento.nombre_documento == "DNI")
+        )
+        if not tipo_documento:
+            tipo_documento = TipoDocumento(
+                nombre_documento="DNI",
+                longitud=8,
+                estado=True
+            )
+            session.add(tipo_documento)
+            await session.commit()
+            await session.refresh(tipo_documento)
+            print(f"✅ Tipo de documento creado: id={tipo_documento.id_tipo_documento}")
+        else:
+            print(f"ℹ️  Tipo de documento ya existe: id={tipo_documento.id_tipo_documento}")
 
         # 2. Crear o obtener módulo usuarios
         modulo = await session.scalar(
@@ -97,27 +114,31 @@ async def crear_admin():
         if not usuario:
             # Password: Admin123!
             password = "Admin123!"
-            
+            numero_documento = "00000000"
+
             usuario = Usuario(
                 id_rol=rol.id_rol,
+                id_tipo_documento=tipo_documento.id_tipo_documento,
+                numero_documento=numero_documento,
                 nombre_usuario="admin",
                 password_hash=hash_password(password),
                 nombres="Administrador",
                 apellidos="CODIP",
-                correo="admin@codip.com.pe",
+                correo="codipcorporativo@gmail.com",
                 estado=True,
                 debe_cambiar_password=False
             )
             session.add(usuario)
             await session.commit()
             await session.refresh(usuario)
-            
+
             print("\n" + "="*50)
             print("✅ USUARIO ADMINISTRADOR CREADO")
             print("="*50)
             print(f"Usuario: admin")
             print(f"Password: {password}")
-            print(f"Correo: admin@codip.com.pe")
+            print(f"Documento: DNI {numero_documento}")
+            print(f"Correo: codipcorporativo@gmail.com")
             print(f"ID: {usuario.id_usuario}")
             print("="*50)
         else:

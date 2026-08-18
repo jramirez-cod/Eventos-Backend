@@ -9,6 +9,7 @@ from app.modules.usuarios.models import (
     Permiso,
     Rol,
     RolPermisoModulo,
+    TipoDocumento,
     Usuario,
     UsuarioTokenRecuperacion,
 )
@@ -21,21 +22,45 @@ class UsuarioRepository:
     async def get_by_id(self, id_usuario: int) -> Usuario | None:
         stmt = (
             select(Usuario)
-            .options(joinedload(Usuario.rol))
+            .options(joinedload(Usuario.rol), joinedload(Usuario.tipo_documento))
             .where(Usuario.id_usuario == id_usuario)
         )
         return await self.db.scalar(stmt)
 
     async def get_by_username(self, nombre_usuario: str) -> Usuario | None:
-        stmt = select(Usuario).where(func.lower(Usuario.nombre_usuario) == nombre_usuario.lower())
+        stmt = (
+            select(Usuario)
+            .options(joinedload(Usuario.rol))
+            .where(func.lower(Usuario.nombre_usuario) == nombre_usuario.lower())
+        )
         return await self.db.scalar(stmt)
 
     async def get_by_email(self, correo: str) -> Usuario | None:
-        stmt = select(Usuario).where(func.lower(Usuario.correo) == correo.lower())
+        stmt = (
+            select(Usuario)
+            .options(joinedload(Usuario.rol))
+            .where(func.lower(Usuario.correo) == correo.lower())
+        )
+        return await self.db.scalar(stmt)
+
+    async def get_by_numero_documento(self, numero_documento: str) -> Usuario | None:
+        stmt = select(Usuario).where(Usuario.numero_documento == numero_documento)
         return await self.db.scalar(stmt)
 
     async def get_role(self, id_rol: int) -> Rol | None:
         return await self.db.get(Rol, id_rol)
+
+    async def get_tipo_documento(self, id_tipo_documento: int) -> TipoDocumento | None:
+        return await self.db.get(TipoDocumento, id_tipo_documento)
+
+    async def list_tipos_documento(self) -> list[TipoDocumento]:
+        stmt = (
+            select(TipoDocumento)
+            .where(TipoDocumento.estado.is_(True))
+            .order_by(TipoDocumento.nombre_documento)
+        )
+        result = await self.db.execute(stmt)
+        return list(result.scalars().all())
 
     async def get_role_by_name(self, nombre_rol: str) -> Rol | None:
         stmt = select(Rol).where(func.upper(Rol.nombre_rol) == nombre_rol.upper())
@@ -53,6 +78,8 @@ class UsuarioRepository:
         self,
         *,
         id_rol: int,
+        id_tipo_documento: int,
+        numero_documento: str,
         nombre_usuario: str,
         password_hash: str,
         nombres: str,
@@ -63,6 +90,8 @@ class UsuarioRepository:
     ) -> Usuario:
         usuario = Usuario(
             id_rol=id_rol,
+            id_tipo_documento=id_tipo_documento,
+            numero_documento=numero_documento,
             nombre_usuario=nombre_usuario,
             password_hash=password_hash,
             nombres=nombres,
@@ -78,11 +107,6 @@ class UsuarioRepository:
 
     async def update_password(self, usuario: Usuario, password_hash: str) -> Usuario:
         usuario.password_hash = password_hash
-        await self.db.flush()
-        return usuario
-
-    async def update_last_login(self, usuario: Usuario) -> Usuario:
-        usuario.ultimo_acceso = datetime.now(UTC)
         await self.db.flush()
         return usuario
 
@@ -147,8 +171,8 @@ class UsuarioRepository:
     async def list_all(self) -> list[Usuario]:
         stmt = (
             select(Usuario)
-            .options(joinedload(Usuario.rol))
-            .order_by(Usuario.creado_en.desc())
+            .options(joinedload(Usuario.rol), joinedload(Usuario.tipo_documento))
+            .order_by(Usuario.id_usuario.desc())
         )
         result = await self.db.execute(stmt)
         return list(result.scalars().all())

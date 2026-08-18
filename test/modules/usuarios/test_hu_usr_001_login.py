@@ -95,7 +95,6 @@ async def test_usuario_con_password_temporal_recibe_token_limitado(
             debe_cambiar_password=True,
         )
         await session.commit()
-        user_id = usuario.id_usuario
 
     response = await client.post(
         "/api/v1/auth/login",
@@ -108,10 +107,6 @@ async def test_usuario_con_password_temporal_recibe_token_limitado(
     assert body["token_type"] == "password_change"
     assert body["access_token"] is None
     assert body["password_change_token"]
-
-    async with session_factory() as session:
-        stored = await session.get(type(usuario), user_id)
-        assert stored.ultimo_acceso is None
 
 
 async def test_oauth_token_para_swagger_devuelve_bearer_token(

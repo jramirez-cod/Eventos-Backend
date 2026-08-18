@@ -27,6 +27,7 @@ async def test_bootstrap_rbac_es_idempotente_para_grupos_y_categorias(
         "email": "admin-bootstrap@codip.pe",
         "nombres": "Administrador",
         "apellidos": "Eventos",
+        "numero_documento": "12345678",
     }
     monkeypatch.setattr(
         bootstrap_security,
@@ -48,6 +49,7 @@ async def test_bootstrap_rbac_es_idempotente_para_grupos_y_categorias(
         email=None,
         nombres=None,
         apellidos=None,
+        documento=None,
     )
 
     await bootstrap_security.bootstrap(args)

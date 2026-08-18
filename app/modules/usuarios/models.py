@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, String, Text, func
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -15,14 +15,21 @@ class Rol(Base):
     )
     descripcion: Mapped[str | None] = mapped_column(String(255))
     estado: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    creado_en: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now()
-    )
-    actualizado_en: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now()
-    )
 
     usuarios: Mapped[list["Usuario"]] = relationship(back_populates="rol")
+
+
+class TipoDocumento(Base):
+    __tablename__ = "tipo_documento"
+
+    id_tipo_documento: Mapped[int] = mapped_column(
+        BigInteger, primary_key=True, index=True
+    )
+    nombre_documento: Mapped[str] = mapped_column(String(50), nullable=False)
+    longitud: Mapped[int | None] = mapped_column(Integer)
+    estado: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+    usuarios: Mapped[list["Usuario"]] = relationship(back_populates="tipo_documento")
 
 
 class Usuario(Base):
@@ -30,6 +37,12 @@ class Usuario(Base):
 
     id_usuario: Mapped[int] = mapped_column(BigInteger, primary_key=True, index=True)
     id_rol: Mapped[int] = mapped_column(ForeignKey("rol.id_rol"), nullable=False)
+    id_tipo_documento: Mapped[int] = mapped_column(
+        ForeignKey("tipo_documento.id_tipo_documento"), nullable=False
+    )
+    numero_documento: Mapped[str] = mapped_column(
+        String(50), nullable=False, unique=True
+    )
     nombre_usuario: Mapped[str] = mapped_column(String(80), nullable=False, unique=True)
     password_hash: Mapped[str] = mapped_column(Text, nullable=False)
     nombres: Mapped[str] = mapped_column(String(120), nullable=False)
@@ -39,15 +52,9 @@ class Usuario(Base):
     debe_cambiar_password: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True
     )
-    ultimo_acceso: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    creado_en: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now()
-    )
-    actualizado_en: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now()
-    )
 
     rol: Mapped[Rol] = relationship(back_populates="usuarios")
+    tipo_documento: Mapped[TipoDocumento] = relationship(back_populates="usuarios")
     tokens_recuperacion: Mapped[list["UsuarioTokenRecuperacion"]] = relationship(
         back_populates="usuario"
     )
@@ -81,12 +88,6 @@ class Modulo(Base):
     )
     descripcion: Mapped[str | None] = mapped_column(String(255))
     estado: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    creado_en: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now()
-    )
-    actualizado_en: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now()
-    )
 
 
 class Permiso(Base):
@@ -99,12 +100,6 @@ class Permiso(Base):
     )
     descripcion: Mapped[str | None] = mapped_column(String(255))
     estado: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    creado_en: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now()
-    )
-    actualizado_en: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now()
-    )
 
 
 class RolPermisoModulo(Base):
@@ -119,7 +114,4 @@ class RolPermisoModulo(Base):
     )
     id_modulo: Mapped[int] = mapped_column(
         ForeignKey("modulo.id_modulo"), nullable=False
-    )
-    creado_en: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now()
     )

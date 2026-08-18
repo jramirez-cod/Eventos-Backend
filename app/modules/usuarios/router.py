@@ -6,16 +6,19 @@ from app.modules.usuarios.dependencies import require_permission
 from app.modules.usuarios.dto import (
     InactivarUsuarioDTO,
     RolResponseDTO,
+    TipoDocumentoResponseDTO,
     UsuarioCreateDTO,
     UsuarioResponseDTO,
 )
-from app.modules.usuarios.models import Rol, Usuario
+from app.modules.usuarios.models import Rol, TipoDocumento, Usuario
 from app.modules.usuarios.repository import UsuarioRepository
 from app.modules.usuarios.usuario_service import (
+    DuplicateDocumentoError,
     DuplicateEmailError,
     DuplicateUsernameError,
     PasswordPolicyViolationError,
     RolNotFoundError,
+    TipoDocumentoNotFoundError,
     UsuarioNotFoundError,
     UsuarioService,
 )
@@ -33,6 +36,14 @@ async def listar_roles(
     db: AsyncSession = Depends(get_db),
 ) -> list[Rol]:
     return await UsuarioRepository(db).list_roles()
+
+
+@router.get("/tipos-documento", response_model=list[TipoDocumentoResponseDTO])
+async def listar_tipos_documento(
+    actor: Usuario = Depends(require_permission(MODULO_USUARIOS, PERMISO_CREAR_USUARIO)),
+    db: AsyncSession = Depends(get_db),
+) -> list[TipoDocumento]:
+    return await UsuarioRepository(db).list_tipos_documento()
 
 
 @router.get("", response_model=list[UsuarioResponseDTO])
@@ -53,10 +64,14 @@ async def crear_usuario(
         return await UsuarioService(db).crear_usuario(data=data, actor=actor)
     except RolNotFoundError:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Rol no encontrado.")
+    except TipoDocumentoNotFoundError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tipo de documento no encontrado.")
     except DuplicateUsernameError:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Nombre de usuario ya existe.")
     except DuplicateEmailError:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Correo ya existe.")
+    except DuplicateDocumentoError:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Número de documento ya existe.")
     except PasswordPolicyViolationError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=exc.errors)
 
