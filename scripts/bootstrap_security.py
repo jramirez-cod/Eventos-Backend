@@ -17,6 +17,7 @@ if str(ROOT) not in sys.path:
 
 from app.core import security  # noqa: E402
 from app.db.session import AsyncSessionLocal, engine  # noqa: E402
+from app.modules.categorias.models import Categoria  # noqa: E402
 from app.modules.usuarios.models import (  # noqa: E402
     Modulo,
     Permiso,
@@ -31,20 +32,14 @@ ROLE_USER = "PERSONAL_EVENTOS"
 MODULE_USUARIOS = "usuarios"
 PERMISSIONS_USUARIOS = ("CREAR_USUARIO", "INACTIVAR_USUARIO")
 MODULO_GRUPOS = "GRUPOS"
-PERMISOS_GRUPOS = (
-    "CREAR_GRUPO",
-    "INACTIVAR_GRUPO",
-    "REACTIVAR_GRUPO",
-    "CONFIGURAR_GRUPO",
-)
+PERMISOS_GRUPOS = ("CREAR_GRUPO", "INACTIVAR_GRUPO")
 MODULO_CATEGORIAS = "CATEGORIAS"
-PERMISOS_CATEGORIAS = (
-    "CREAR_CATEGORIA",
-    "INACTIVAR_CATEGORIA",
-    "REACTIVAR_CATEGORIA",
-)
+PERMISOS_CATEGORIAS = ("CREAR_CATEGORIA", "INACTIVAR_CATEGORIA")
+MODULO_EMPRESAS = "EMPRESAS"
+PERMISOS_EMPRESAS = ("CREAR_EMPRESA", "INACTIVAR_EMPRESA")
 TIPO_DOCUMENTO_DNI = "DNI"
 TIPO_DOCUMENTO_DNI_LONGITUD = 8
+CATEGORIA_SIN_CATEGORIA = "Sin categoría"
 REQUIRED_TABLES = {
     "rol",
     "usuario",
@@ -52,6 +47,8 @@ REQUIRED_TABLES = {
     "permiso",
     "rol_permiso_modulo",
     "tipo_documento",
+    "categoria",
+    "empresa",
 }
 
 
@@ -108,6 +105,27 @@ async def _get_or_create_tipo_documento(nombre_documento: str, *, longitud: int)
             await session.commit()
             await session.refresh(tipo_documento)
         return tipo_documento
+
+
+async def _get_or_create_categoria(nombre_categoria: str) -> Categoria:
+    async with AsyncSessionLocal() as session:
+        categoria = await session.scalar(
+            select(Categoria).where(Categoria.nombre_categoria == nombre_categoria)
+        )
+        if categoria is None:
+            categoria = Categoria(
+                nombre_categoria=nombre_categoria,
+                descripcion="Categoría por defecto para grupos sin clasificar",
+                estado=True,
+            )
+            session.add(categoria)
+            await session.commit()
+            await session.refresh(categoria)
+        elif not categoria.estado:
+            categoria.estado = True
+            await session.commit()
+            await session.refresh(categoria)
+        return categoria
 
 
 async def _get_or_create_module(nombre_modulo: str, *, descripcion: str) -> Modulo:
@@ -269,9 +287,13 @@ async def bootstrap(args: argparse.Namespace) -> None:
     categorias_module = await _get_or_create_module(
         MODULO_CATEGORIAS, descripcion="Gestión de categorías"
     )
+    empresas_module = await _get_or_create_module(
+        MODULO_EMPRESAS, descripcion="Gestión de empresas"
+    )
     tipo_documento_dni = await _get_or_create_tipo_documento(
         TIPO_DOCUMENTO_DNI, longitud=TIPO_DOCUMENTO_DNI_LONGITUD
     )
+    await _get_or_create_categoria(CATEGORIA_SIN_CATEGORIA)
 
     # Usuarios: crear/inactivar cuentas queda reservado al administrador.
     for permission_name in PERMISSIONS_USUARIOS:
@@ -282,10 +304,11 @@ async def bootstrap(args: argparse.Namespace) -> None:
             permiso=permission,
         )
 
-    # Grupos y categorías: operación diaria, administrador y personal de eventos.
+    # Grupos, categorías y empresas: operación diaria, administrador y personal de eventos.
     for modulo, permisos in (
         (grupos_module, PERMISOS_GRUPOS),
         (categorias_module, PERMISOS_CATEGORIAS),
+        (empresas_module, PERMISOS_EMPRESAS),
     ):
         for permission_name in permisos:
             permission = await _get_or_create_permission(permission_name)

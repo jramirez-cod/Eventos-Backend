@@ -26,6 +26,8 @@ from app.modules.usuarios.models import Usuario
 from app.modules.usuarios.repository import UsuarioRepository
 
 
+MODULO_USUARIOS = "USUARIOS"
+
 RECOVERY_ACCEPTED_MESSAGE = (
     "Si existe una cuenta asociada, se enviarán las instrucciones de recuperación."
 )
@@ -205,6 +207,7 @@ class AuthService:
             await self.usuarios.mark_recovery_token_used(verification_token)
             await self.auditoria.create(
                 id_usuario=usuario.id_usuario,
+                id_modulo=await self._id_modulo(),
                 entidad="usuario",
                 id_entidad=usuario.id_usuario,
                 accion="CAMBIO_PASSWORD_INICIAL",
@@ -317,6 +320,7 @@ class AuthService:
             await self.usuarios.mark_recovery_token_used(recovery_token)
             await self.auditoria.create(
                 id_usuario=usuario.id_usuario,
+                id_modulo=await self._id_modulo(),
                 entidad="usuario",
                 id_entidad=usuario.id_usuario,
                 accion="RESTABLECIMIENTO_PASSWORD",
@@ -371,6 +375,10 @@ class AuthService:
                 "El remitente de correo no está configurado."
             )
         return sender.correo
+
+    async def _id_modulo(self) -> int | None:
+        modulo = await self.usuarios.get_module_by_name(MODULO_USUARIOS)
+        return modulo.id_modulo if modulo else None
 
     @staticmethod
     def _validate_password_policy(password: str) -> None:

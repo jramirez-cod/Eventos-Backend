@@ -1,0 +1,214 @@
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.modules.auditoria.repository import AuditoriaRepository
+from app.modules.categorias.models import Categoria
+from app.modules.categorias.repository import CategoriaRepository
+from app.modules.empresas.dto import CambiarClasificacionDTO, EmpresaCreateDTO
+from app.modules.empresas.models import Empresa, EmpresaHistorialClasificacion
+from app.modules.empresas.repository import EmpresaRepository
+from app.modules.empresas.ruc_client import RucConsultor, RucInfo, get_ruc_consultor
+from app.modules.grupos.models import Grupo
+from app.modules.usuarios.models import Usuario
+from app.modules.usuarios.repository import UsuarioRepository
+
+
+MODULO_EMPRESAS = "EMPRESAS"
+
+
+class EmpresaServiceError(Exception):
+    pass
+
+
+class EmpresaNotFoundError(EmpresaServiceError):
+    pass
+
+
+class DuplicateRucError(EmpresaServiceError):
+    pass
+
+
+class DetalleCategoriaInvalidoError(EmpresaServiceError):
+    pass
+
+
+class EmpresaService:
+    def __init__(
+        self, db: AsyncSession, *, ruc_consultor: RucConsultor | None = None
+    ) -> None:
+        self.db = db
+        self.empresas = EmpresaRepository(db)
+        self.categorias = CategoriaRepository(db)
+        self.usuarios = UsuarioRepository(db)
+        self.auditoria = AuditoriaRepository(db)
+        self.ruc_consultor = ruc_consultor or get_ruc_consultor()
+
+    async def consultar_ruc(self, ruc: str) -> RucInfo:
+        return await self.ruc_consultor.consultar(ruc)
+
+    async def crear_empresa(
+        self, *, data: EmpresaCreateDTO, actor: Usuario
+    ) -> tuple[Empresa, Grupo, Categoria]:
+        if await self.empresas.get_by_ruc(data.ruc):
+            raise DuplicateRucError("El RUC ya está registrado.")
+
+        detalle_completo = await self._validar_detalle_categoria(
+            data.id_detalle_categoria
+        )
+
+        try:
+            empresa = await self.empresas.create(
+                nombre_empresa=data.nombre_empresa,
+                ruc=data.ruc,
+                id_detalle_categoria=data.id_detalle_categoria,
+                razon_social=data.razon_social,
+                nombre_comercial=data.nombre_comercial,
+            )
+            await self.empresas.create_historial(
+                id_empresa=empresa.id_empresa,
+                id_detalle_categoria=data.id_detalle_categoria,
+            )
+            await self.auditoria.create(
+                id_usuario=actor.id_usuario,
+                id_modulo=await self._id_modulo(),
+                entidad="empresa",
+                id_entidad=empresa.id_empresa,
+                accion="CREACION_EMPRESA",
+                valor_nuevo={
+                    "id_empresa": empresa.id_empresa,
+                    "nombre_empresa": empresa.nombre_empresa,
+                    "ruc": empresa.ruc,
+                    "id_detalle_categoria": empresa.id_detalle_categoria,
+                    "estado": empresa.estado,
+                },
+            )
+            await self.db.commit()
+            await self.db.refresh(empresa)
+        except Exception:
+            await self.db.rollback()
+            raise
+
+        _, grupo, categoria = detalle_completo
+        return empresa, grupo, categoria
+
+    async def cambiar_clasificacion(
+        self, *, id_empresa: int, data: CambiarClasificacionDTO, actor: Usuario
+    ) -> tuple[Empresa, Grupo, Categoria]:
+        empresa = await self.empresas.get_by_id(id_empresa)
+        if empresa is None:
+            raise EmpresaNotFoundError("Empresa no encontrada.")
+
+        detalle_completo = await self._validar_detalle_categoria(
+            data.id_detalle_categoria
+        )
+
+        anterior = {"id_detalle_categoria": empresa.id_detalle_categoria}
+        try:
+            await self.empresas.cerrar_historial_vigente(id_empresa)
+            await self.empresas.update_clasificacion(
+                empresa, id_detalle_categoria=data.id_detalle_categoria
+            )
+            await self.empresas.create_historial(
+                id_empresa=id_empresa,
+                id_detalle_categoria=data.id_detalle_categoria,
+            )
+            await self.auditoria.create(
+                id_usuario=actor.id_usuario,
+                id_modulo=await self._id_modulo(),
+                entidad="empresa",
+                id_entidad=empresa.id_empresa,
+                accion="CAMBIO_CLASIFICACION_EMPRESA",
+                valor_anterior=anterior,
+                valor_nuevo={"id_detalle_categoria": empresa.id_detalle_categoria},
+                motivo=data.motivo,
+            )
+            await self.db.commit()
+            await self.db.refresh(empresa)
+        except Exception:
+            await self.db.rollback()
+            raise
+
+        _, grupo, categoria = detalle_completo
+        return empresa, grupo, categoria
+
+    async def inactivar_empresa(
+        self, *, id_empresa: int, motivo: str | None, actor: Usuario
+    ) -> Empresa:
+        return await self._set_estado(
+            id_empresa=id_empresa,
+            estado=False,
+            accion="INACTIVACION_EMPRESA",
+            motivo=motivo,
+            actor=actor,
+        )
+
+    async def reactivar_empresa(self, *, id_empresa: int, actor: Usuario) -> Empresa:
+        return await self._set_estado(
+            id_empresa=id_empresa,
+            estado=True,
+            accion="REACTIVACION_EMPRESA",
+            motivo=None,
+            actor=actor,
+        )
+
+    async def listar_historial(
+        self, id_empresa: int
+    ) -> list[tuple[EmpresaHistorialClasificacion, Grupo, Categoria]]:
+        empresa = await self.empresas.get_by_id(id_empresa)
+        if empresa is None:
+            raise EmpresaNotFoundError("Empresa no encontrada.")
+        return await self.empresas.list_historial(id_empresa)
+
+    async def _set_estado(
+        self,
+        *,
+        id_empresa: int,
+        estado: bool,
+        accion: str,
+        motivo: str | None,
+        actor: Usuario,
+    ) -> Empresa:
+        empresa = await self.empresas.get_by_id(id_empresa)
+        if empresa is None:
+            raise EmpresaNotFoundError("Empresa no encontrada.")
+
+        anterior = {"estado": empresa.estado}
+        try:
+            await self.empresas.set_estado(empresa, estado=estado)
+            await self.auditoria.create(
+                id_usuario=actor.id_usuario,
+                id_modulo=await self._id_modulo(),
+                entidad="empresa",
+                id_entidad=empresa.id_empresa,
+                accion=accion,
+                valor_anterior=anterior,
+                valor_nuevo={"estado": empresa.estado},
+                motivo=motivo,
+            )
+            await self.db.commit()
+            await self.db.refresh(empresa)
+            return empresa
+        except Exception:
+            await self.db.rollback()
+            raise
+
+    async def _validar_detalle_categoria(
+        self, id_detalle_categoria: int
+    ) -> tuple[object, Grupo, Categoria]:
+        detalle_completo = await self.categorias.get_detalle_completo_by_id(
+            id_detalle_categoria
+        )
+        if detalle_completo is None:
+            raise DetalleCategoriaInvalidoError(
+                "La combinación de grupo y categoría no existe."
+            )
+
+        _, grupo, categoria = detalle_completo
+        if not grupo.estado or not categoria.estado:
+            raise DetalleCategoriaInvalidoError(
+                "El grupo o la categoría seleccionados están inactivos."
+            )
+        return detalle_completo
+
+    async def _id_modulo(self) -> int | None:
+        modulo = await self.usuarios.get_module_by_name(MODULO_EMPRESAS)
+        return modulo.id_modulo if modulo else None

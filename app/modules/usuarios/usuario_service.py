@@ -7,6 +7,9 @@ from app.modules.usuarios.models import Usuario
 from app.modules.usuarios.repository import UsuarioRepository
 
 
+MODULO_USUARIOS = "USUARIOS"
+
+
 class UsuarioServiceError(Exception):
     pass
 
@@ -67,6 +70,8 @@ class UsuarioService:
 
         self._validate_numero_documento(data.numero_documento, tipo_documento.longitud)
 
+        id_modulo = await self._id_modulo()
+
         try:
             usuario = await self.usuarios.create_user(
                 id_rol=data.id_rol,
@@ -82,6 +87,7 @@ class UsuarioService:
             )
             await self.auditoria.create(
                 id_usuario=actor.id_usuario,
+                id_modulo=id_modulo,
                 entidad="usuario",
                 id_entidad=usuario.id_usuario,
                 accion="CREACION_USUARIO",
@@ -111,10 +117,12 @@ class UsuarioService:
             raise UsuarioNotFoundError("Usuario no encontrado.")
 
         anterior = {"estado": usuario.estado}
+        id_modulo = await self._id_modulo()
         try:
             await self.usuarios.deactivate_user(usuario)
             await self.auditoria.create(
                 id_usuario=actor.id_usuario,
+                id_modulo=id_modulo,
                 entidad="usuario",
                 id_entidad=usuario.id_usuario,
                 accion="INACTIVACION_USUARIO",
@@ -135,10 +143,12 @@ class UsuarioService:
             raise UsuarioNotFoundError("Usuario no encontrado.")
 
         anterior = {"estado": usuario.estado}
+        id_modulo = await self._id_modulo()
         try:
             await self.usuarios.activate_user(usuario)
             await self.auditoria.create(
                 id_usuario=actor.id_usuario,
+                id_modulo=id_modulo,
                 entidad="usuario",
                 id_entidad=usuario.id_usuario,
                 accion="ACTIVACION_USUARIO",
@@ -151,6 +161,10 @@ class UsuarioService:
         except Exception:
             await self.db.rollback()
             raise
+
+    async def _id_modulo(self) -> int | None:
+        modulo = await self.usuarios.get_module_by_name(MODULO_USUARIOS)
+        return modulo.id_modulo if modulo else None
 
     @staticmethod
     def _validate_numero_documento(numero_documento: str, longitud: int | None) -> None:

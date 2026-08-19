@@ -61,6 +61,10 @@ class Settings(BaseSettings):
     smtp_timeout_seconds: int = 20
     smtp_app_password: SecretStr = SecretStr("")
 
+    # Consulta de RUC (Factiliza)
+    factiliza_base_url: str = "https://api.factiliza.com/v1"
+    factiliza_api_token: SecretStr = SecretStr("")
+
     @property
     def database_url(self) -> URL:
         """

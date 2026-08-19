@@ -17,7 +17,7 @@ from scripts import bootstrap_security
 pytestmark = pytest.mark.asyncio
 
 
-async def test_bootstrap_rbac_es_idempotente_para_grupos_y_categorias(
+async def test_bootstrap_rbac_es_idempotente(
     session_factory,
     monkeypatch,
 ) -> None:
@@ -59,13 +59,13 @@ async def test_bootstrap_rbac_es_idempotente_para_grupos_y_categorias(
         assert await session.scalar(select(func.count()).select_from(Rol)) == 2
         assert await session.scalar(
             select(func.count()).select_from(Modulo)
-        ) == 3
+        ) == 4
         assert await session.scalar(
             select(func.count()).select_from(Permiso)
-        ) == 9
+        ) == 8
         assert await session.scalar(
             select(func.count()).select_from(RolPermisoModulo)
-        ) == 16
+        ) == 14
         assert await session.scalar(
             select(func.count()).select_from(Usuario)
         ) == 1
@@ -76,4 +76,4 @@ async def test_bootstrap_rbac_es_idempotente_para_grupos_y_categorias(
             .join(Rol, Rol.id_rol == RolPermisoModulo.id_rol)
             .where(Rol.nombre_rol == "PERSONAL_EVENTOS")
         )
-        assert personal_permissions == 7
+        assert personal_permissions == 6

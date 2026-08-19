@@ -16,6 +16,7 @@ class AuditoriaRepository:
         id_usuario: int | None,
         entidad: str,
         accion: str,
+        id_modulo: int | None = None,
         id_entidad: int | str | None = None,
         valor_anterior: dict[str, Any] | None = None,
         valor_nuevo: dict[str, Any] | None = None,
@@ -26,6 +27,7 @@ class AuditoriaRepository:
 
         auditoria = Auditoria(
             id_usuario=id_usuario,
+            id_modulo=id_modulo,
             entidad=entidad,
             id_entidad=str(id_entidad) if id_entidad is not None else None,
             accion=accion,

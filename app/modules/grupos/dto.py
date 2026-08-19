@@ -1,28 +1,10 @@
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class GrupoCreateDTO(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    nombre_grupo: str = Field(min_length=1, max_length=120)
+    id_grupo: int = Field(gt=0)
+    nombre_grupo: str = Field(min_length=1, max_length=100)
     descripcion: str | None = Field(default=None, max_length=255)
-    requiere_categoria: bool = False
-
-    @field_validator("nombre_grupo")
-    @classmethod
-    def validate_nombre_grupo(cls, value: str) -> str:
-        normalized = value.strip()
-        if not normalized:
-            raise ValueError("El nombre del grupo es obligatorio.")
-        return normalized
-
-    @field_validator("descripcion")
-    @classmethod
-    def normalize_descripcion(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        normalized = value.strip()
-        return normalized or None
 
 
 class GrupoResponseDTO(BaseModel):
@@ -31,11 +13,20 @@ class GrupoResponseDTO(BaseModel):
     id_grupo: int
     nombre_grupo: str
     descripcion: str | None
-    requiere_categoria: bool
     estado: bool
 
 
-class GrupoConfiguracionCategoriaDTO(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+class InactivarGrupoDTO(BaseModel):
+    motivo: str | None = Field(default=None, max_length=500)
 
-    requiere_categoria: bool
+
+class AsignarCategoriaDTO(BaseModel):
+    id_categoria: int = Field(gt=0)
+
+
+class CategoriaAsignadaResponseDTO(BaseModel):
+    id_detalle_categoria: int
+    id_grupo: int
+    id_categoria: int
+    nombre_categoria: str
+    estado: bool

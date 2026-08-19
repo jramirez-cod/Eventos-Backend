@@ -1,15 +1,20 @@
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.auditoria.repository import AuditoriaRepository
-from app.modules.empresas.models import Empresa
+from app.modules.categorias.models import DetalleCategoria
+from app.modules.categorias.repository import CategoriaRepository
 from app.modules.grupos.dto import (
-    GrupoConfiguracionCategoriaDTO,
+    AsignarCategoriaDTO,
     GrupoCreateDTO,
+    InactivarGrupoDTO,
 )
 from app.modules.grupos.models import Grupo
 from app.modules.grupos.repository import GrupoRepository
 from app.modules.usuarios.models import Usuario
+from app.modules.usuarios.repository import UsuarioRepository
+
+
+MODULO_GRUPOS = "GRUPOS"
 
 
 class GrupoServiceError(Exception):
@@ -20,15 +25,32 @@ class GrupoNotFoundError(GrupoServiceError):
     pass
 
 
-class DuplicateGroupNameError(GrupoServiceError):
+class DuplicateGrupoIdError(GrupoServiceError):
     pass
 
 
-class ActiveCompaniesInGroupError(GrupoServiceError):
-    def __init__(self, empresas: list[Empresa]) -> None:
-        self.empresas = empresas
+class DuplicateGrupoNameError(GrupoServiceError):
+    pass
+
+
+class CategoriaNotFoundError(GrupoServiceError):
+    pass
+
+
+class CategoriaYaAsignadaError(GrupoServiceError):
+    pass
+
+
+class AsignacionNotFoundError(GrupoServiceError):
+    pass
+
+
+class GrupoEnUsoError(GrupoServiceError):
+    def __init__(self, *, nombres_empresas: list[str]) -> None:
+        self.nombres_empresas = nombres_empresas
         super().__init__(
-            "No se puede inactivar el grupo porque existen empresas activas asociadas."
+            "El grupo está siendo usado por empresas activas: "
+            + ", ".join(nombres_empresas)
         )
 
 
@@ -36,149 +58,180 @@ class GrupoService:
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
         self.grupos = GrupoRepository(db)
+        self.categorias = CategoriaRepository(db)
+        self.usuarios = UsuarioRepository(db)
         self.auditoria = AuditoriaRepository(db)
 
-    async def crear_grupo(
-        self,
-        *,
-        data: GrupoCreateDTO,
-        actor: Usuario,
-    ) -> Grupo:
-        if await self.grupos.get_by_name(data.nombre_grupo) is not None:
-            raise DuplicateGroupNameError("El nombre del grupo ya existe.")
+    async def crear_grupo(self, *, data: GrupoCreateDTO, actor: Usuario) -> Grupo:
+        if await self.grupos.get_by_id(data.id_grupo):
+            raise DuplicateGrupoIdError("El id de grupo ya existe.")
+        if await self.grupos.get_by_nombre(data.nombre_grupo):
+            raise DuplicateGrupoNameError("El nombre del grupo ya existe.")
 
         try:
             grupo = await self.grupos.create(
+                id_grupo=data.id_grupo,
                 nombre_grupo=data.nombre_grupo,
                 descripcion=data.descripcion,
-                requiere_categoria=data.requiere_categoria,
             )
             await self.auditoria.create(
                 id_usuario=actor.id_usuario,
+                id_modulo=await self._id_modulo(),
                 entidad="grupo",
                 id_entidad=grupo.id_grupo,
-                accion="CREAR_GRUPO",
-                valor_nuevo=self._audit_value(grupo),
+                accion="CREACION_GRUPO",
+                valor_nuevo={
+                    "id_grupo": grupo.id_grupo,
+                    "nombre_grupo": grupo.nombre_grupo,
+                    "estado": grupo.estado,
+                },
             )
             await self.db.commit()
+            await self.db.refresh(grupo)
             return grupo
-        except IntegrityError as exc:
-            await self.db.rollback()
-            raise DuplicateGroupNameError(
-                "El nombre del grupo ya existe."
-            ) from exc
         except Exception:
             await self.db.rollback()
             raise
 
     async def inactivar_grupo(
-        self,
-        *,
-        id_grupo: int,
-        actor: Usuario,
+        self, *, id_grupo: int, data: InactivarGrupoDTO, actor: Usuario
     ) -> Grupo:
-        grupo = await self._get_for_update(id_grupo)
-        if not grupo.estado:
-            return grupo
-
-        empresas = await self.grupos.get_active_companies_by_group(id_grupo)
-        if empresas:
-            raise ActiveCompaniesInGroupError(empresas)
-
-        return await self._change_estado(
-            grupo=grupo,
-            estado=False,
-            accion="INACTIVAR_GRUPO",
-            actor=actor,
-        )
-
-    async def reactivar_grupo(
-        self,
-        *,
-        id_grupo: int,
-        actor: Usuario,
-    ) -> Grupo:
-        grupo = await self._get_for_update(id_grupo)
-        if grupo.estado:
-            return grupo
-
-        return await self._change_estado(
-            grupo=grupo,
-            estado=True,
-            accion="REACTIVAR_GRUPO",
-            actor=actor,
-        )
-
-    async def configurar_categoria(
-        self,
-        *,
-        id_grupo: int,
-        data: GrupoConfiguracionCategoriaDTO,
-        actor: Usuario,
-    ) -> Grupo:
-        grupo = await self._get_for_update(id_grupo)
-        previous_value = grupo.requiere_categoria
-        if previous_value == data.requiere_categoria:
-            return grupo
-
-        try:
-            await self.grupos.update_requiere_categoria(
-                grupo,
-                data.requiere_categoria,
-            )
-            await self.auditoria.create(
-                id_usuario=actor.id_usuario,
-                entidad="grupo",
-                id_entidad=grupo.id_grupo,
-                accion="CAMBIAR_REQUIERE_CATEGORIA",
-                valor_anterior={"requiere_categoria": previous_value},
-                valor_nuevo={
-                    "requiere_categoria": grupo.requiere_categoria
-                },
-            )
-            await self.db.commit()
-            return grupo
-        except Exception:
-            await self.db.rollback()
-            raise
-
-    async def _get_for_update(self, id_grupo: int) -> Grupo:
-        grupo = await self.grupos.get_by_id(id_grupo, for_update=True)
+        grupo = await self.grupos.get_by_id(id_grupo)
         if grupo is None:
             raise GrupoNotFoundError("Grupo no encontrado.")
-        return grupo
 
-    async def _change_estado(
+        empresas = await self.grupos.list_empresas_activas_usando(id_grupo)
+        if empresas:
+            raise GrupoEnUsoError(
+                nombres_empresas=[empresa.nombre_empresa for empresa in empresas]
+            )
+
+        return await self._set_estado(
+            id_grupo=id_grupo,
+            estado=False,
+            accion="INACTIVACION_GRUPO",
+            motivo=data.motivo,
+            actor=actor,
+        )
+
+    async def reactivar_grupo(self, *, id_grupo: int, actor: Usuario) -> Grupo:
+        return await self._set_estado(
+            id_grupo=id_grupo,
+            estado=True,
+            accion="REACTIVACION_GRUPO",
+            motivo=None,
+            actor=actor,
+        )
+
+    async def _set_estado(
         self,
         *,
-        grupo: Grupo,
+        id_grupo: int,
         estado: bool,
         accion: str,
+        motivo: str | None,
         actor: Usuario,
     ) -> Grupo:
-        previous_value = grupo.estado
+        grupo = await self.grupos.get_by_id(id_grupo)
+        if grupo is None:
+            raise GrupoNotFoundError("Grupo no encontrado.")
+
+        anterior = {"estado": grupo.estado}
         try:
-            await self.grupos.update_estado(grupo, estado)
+            await self.grupos.set_estado(grupo, estado=estado)
             await self.auditoria.create(
                 id_usuario=actor.id_usuario,
+                id_modulo=await self._id_modulo(),
                 entidad="grupo",
                 id_entidad=grupo.id_grupo,
                 accion=accion,
-                valor_anterior={"estado": previous_value},
+                valor_anterior=anterior,
                 valor_nuevo={"estado": grupo.estado},
+                motivo=motivo,
             )
             await self.db.commit()
+            await self.db.refresh(grupo)
             return grupo
         except Exception:
             await self.db.rollback()
             raise
 
-    @staticmethod
-    def _audit_value(grupo: Grupo) -> dict[str, object]:
-        return {
-            "id_grupo": grupo.id_grupo,
-            "nombre_grupo": grupo.nombre_grupo,
-            "descripcion": grupo.descripcion,
-            "requiere_categoria": grupo.requiere_categoria,
-            "estado": grupo.estado,
-        }
+    async def asignar_categoria(
+        self, *, id_grupo: int, data: AsignarCategoriaDTO, actor: Usuario
+    ) -> DetalleCategoria:
+        grupo = await self.grupos.get_by_id(id_grupo)
+        if grupo is None or not grupo.estado:
+            raise GrupoNotFoundError("Grupo no encontrado.")
+
+        categoria = await self.categorias.get_by_id(data.id_categoria)
+        if categoria is None or not categoria.estado:
+            raise CategoriaNotFoundError("Categoría no encontrada.")
+
+        existente = await self.categorias.get_detalle(
+            id_grupo=id_grupo, id_categoria=data.id_categoria
+        )
+        if existente is not None and existente.estado:
+            raise CategoriaYaAsignadaError(
+                "La categoría ya está asignada a este grupo."
+            )
+
+        try:
+            if existente is not None:
+                detalle = await self.categorias.set_detalle_estado(
+                    existente, estado=True
+                )
+            else:
+                detalle = await self.categorias.create_detalle(
+                    id_grupo=id_grupo, id_categoria=data.id_categoria
+                )
+            await self.auditoria.create(
+                id_usuario=actor.id_usuario,
+                id_modulo=await self._id_modulo(),
+                entidad="detalle_categoria",
+                id_entidad=detalle.id_detalle_categoria,
+                accion="ASIGNACION_CATEGORIA_GRUPO",
+                valor_nuevo={
+                    "id_grupo": id_grupo,
+                    "id_categoria": data.id_categoria,
+                    "estado": detalle.estado,
+                },
+            )
+            await self.db.commit()
+            await self.db.refresh(detalle)
+            return detalle
+        except Exception:
+            await self.db.rollback()
+            raise
+
+    async def quitar_categoria(
+        self, *, id_grupo: int, id_categoria: int, actor: Usuario
+    ) -> DetalleCategoria:
+        detalle = await self.categorias.get_detalle(
+            id_grupo=id_grupo, id_categoria=id_categoria
+        )
+        if detalle is None or not detalle.estado:
+            raise AsignacionNotFoundError(
+                "La categoría no está asignada a este grupo."
+            )
+
+        try:
+            await self.categorias.set_detalle_estado(detalle, estado=False)
+            await self.auditoria.create(
+                id_usuario=actor.id_usuario,
+                id_modulo=await self._id_modulo(),
+                entidad="detalle_categoria",
+                id_entidad=detalle.id_detalle_categoria,
+                accion="DESASIGNACION_CATEGORIA_GRUPO",
+                valor_anterior={"estado": True},
+                valor_nuevo={"estado": False},
+            )
+            await self.db.commit()
+            await self.db.refresh(detalle)
+            return detalle
+        except Exception:
+            await self.db.rollback()
+            raise
+
+    async def _id_modulo(self) -> int | None:
+        modulo = await self.usuarios.get_module_by_name(MODULO_GRUPOS)
+        return modulo.id_modulo if modulo else None
