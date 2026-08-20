@@ -624,6 +624,694 @@ Respuesta satisfactoria:
 
 No se elimina el usuario. Solo cambia `estado=false` y se registra auditoría.
 
+## Módulos de Catálogos y Empresas
+
+El backend también contiene módulos independientes para:
+
+```text
+Grupos
+Categorías
+Empresas
+```
+
+Sus routers siguen la misma arquitectura `Router -> Service -> Repository` y
+están registrados actualmente en `app/api/router.py`.
+
+Rutas principales:
+
+```text
+GET    /api/v1/grupos
+POST   /api/v1/grupos
+PATCH  /api/v1/grupos/{id_grupo}/inactivar
+PATCH  /api/v1/grupos/{id_grupo}/reactivar
+GET    /api/v1/grupos/{id_grupo}/categorias
+POST   /api/v1/grupos/{id_grupo}/categorias
+PATCH  /api/v1/grupos/{id_grupo}/categorias/{id_categoria}/quitar
+
+GET    /api/v1/categorias
+POST   /api/v1/categorias
+PATCH  /api/v1/categorias/{id_categoria}/inactivar
+PATCH  /api/v1/categorias/{id_categoria}/reactivar
+
+GET    /api/v1/empresas
+POST   /api/v1/empresas
+GET    /api/v1/empresas/consultar-ruc/{ruc}
+PATCH  /api/v1/empresas/{id_empresa}/inactivar
+PATCH  /api/v1/empresas/{id_empresa}/reactivar
+PATCH  /api/v1/empresas/{id_empresa}/clasificacion
+GET    /api/v1/empresas/{id_empresa}/historial
+```
+
+El bootstrap actual registra los módulos y permisos de Grupos, Categorías y
+Empresas. Todos estos endpoints requieren un JWT `access` y el permiso RBAC
+correspondiente.
+
+## Módulo Maestros
+
+Maestros administra los catálogos de Cargos y Áreas mediante la arquitectura
+existente:
+
+```text
+Router
+  -> Service
+  -> Repository
+  -> SQLAlchemy async
+  -> PostgreSQL
+```
+
+Archivos principales:
+
+```text
+app/modules/maestros/models.py
+app/modules/maestros/dto.py
+app/modules/maestros/repository.py
+app/modules/maestros/service.py
+app/modules/maestros/router.py
+```
+
+### Modelos de Maestros
+
+`Cargo` contiene:
+
+```text
+id_cargo
+nombre_cargo
+estado
+```
+
+`Area` utiliza el atributo Python `nombre_area`, mapeado a la columna
+PostgreSQL `nombre`:
+
+```text
+id_area
+nombre_area
+descripcion
+estado
+```
+
+Los models existentes no fueron modificados. Los DTOs HTTP son independientes:
+
+```text
+CargoCreate
+CargoUpdate
+CargoEstadoUpdate
+CargoResponse
+CargoListResponse
+
+AreaCreate
+AreaUpdate
+AreaEstadoUpdate
+AreaResponse
+AreaListResponse
+```
+
+### Endpoints de Cargos
+
+```text
+GET    /api/v1/maestros/cargos
+GET    /api/v1/maestros/cargos/{id_cargo}
+POST   /api/v1/maestros/cargos
+PUT    /api/v1/maestros/cargos/{id_cargo}
+PATCH  /api/v1/maestros/cargos/{id_cargo}/estado
+```
+
+El listado admite:
+
+```text
+search
+estado
+page
+page_size
+```
+
+Para llenar el selector de Contactos usando únicamente cargos disponibles:
+
+```text
+GET /api/v1/maestros/cargos?estado=true&page=1&page_size=100
+```
+
+Crear un cargo desde Swagger:
+
+```json
+{
+  "nombre_cargo": "Gerente Comercial"
+}
+```
+
+Respuesta `201 Created`:
+
+```json
+{
+  "id_cargo": 3,
+  "nombre_cargo": "Gerente Comercial",
+  "estado": true
+}
+```
+
+Actualizar el nombre:
+
+```text
+PUT /api/v1/maestros/cargos/3
+```
+
+```json
+{
+  "nombre_cargo": "Director Comercial"
+}
+```
+
+Inactivar o reactivar:
+
+```text
+PATCH /api/v1/maestros/cargos/3/estado
+```
+
+```json
+{
+  "estado": false
+}
+```
+
+La inactivación es lógica. No elimina el cargo ni modifica los contactos que
+ya lo utilizan; únicamente deja de aparecer al consultar `estado=true`.
+
+### Endpoints de Áreas
+
+```text
+GET    /api/v1/maestros/areas
+GET    /api/v1/maestros/areas/{id_area}
+POST   /api/v1/maestros/areas
+PUT    /api/v1/maestros/areas/{id_area}
+PATCH  /api/v1/maestros/areas/{id_area}/estado
+```
+
+El listado soporta los mismos parámetros de búsqueda, estado y paginación que
+Cargos.
+
+Crear un área desde Swagger:
+
+```json
+{
+  "nombre_area": "Relaciones Institucionales",
+  "descripcion": "Atención y coordinación con instituciones"
+}
+```
+
+Respuesta `201 Created`:
+
+```json
+{
+  "id_area": 2,
+  "nombre_area": "Relaciones Institucionales",
+  "descripcion": "Atención y coordinación con instituciones",
+  "estado": true
+}
+```
+
+Actualizar:
+
+```text
+PUT /api/v1/maestros/areas/2
+```
+
+```json
+{
+  "nombre_area": "Comunidad",
+  "descripcion": "Relación con la comunidad"
+}
+```
+
+Cambiar estado:
+
+```text
+PATCH /api/v1/maestros/areas/2/estado
+```
+
+```json
+{
+  "estado": false
+}
+```
+
+### Reglas de Maestros
+
+```text
+Los nombres son obligatorios y no pueden quedar vacíos.
+Se eliminan espacios externos y se compactan espacios repetidos.
+Los duplicados se comparan ignorando mayúsculas y minúsculas.
+Cargos y Áreas se crean activos por defecto.
+PUT modifica datos descriptivos, no el estado.
+PATCH /estado permite inactivar y reactivar sin DELETE.
+Solicitar el estado actual nuevamente es una operación idempotente.
+Los listados sin filtro pueden incluir activos e inactivos.
+Las escrituras y la auditoría se confirman en una misma transacción.
+```
+
+Los listados tienen esta estructura:
+
+```json
+{
+  "items": [],
+  "total": 0,
+  "page": 1,
+  "page_size": 20,
+  "pages": 0
+}
+```
+
+### Auditoría de Maestros
+
+```text
+CREAR_CARGO
+ACTUALIZAR_CARGO
+INACTIVAR_CARGO
+REACTIVAR_CARGO
+
+CREAR_AREA
+ACTUALIZAR_AREA
+INACTIVAR_AREA
+REACTIVAR_AREA
+```
+
+Cada registro conserva usuario, módulo, entidad, identificador y valores
+anterior/nuevo cuando corresponde.
+
+### RBAC y registro del router de Maestros
+
+El router requiere el módulo `MAESTROS` y estos permisos:
+
+```text
+CONSULTAR_MAESTROS
+GESTIONAR_MAESTROS
+```
+
+Los `GET` usan `CONSULTAR_MAESTROS`; altas, actualizaciones y cambios de estado
+usan `GESTIONAR_MAESTROS`. El módulo y sus relaciones de rol todavía deben
+agregarse de forma idempotente a `scripts/bootstrap_security.py`.
+
+Para habilitar las rutas en FastAPI debe agregarse manualmente en
+`app/api/router.py`:
+
+```python
+from app.modules.maestros.router import router as maestros_router
+```
+
+y junto a los demás routers:
+
+```python
+api_router.include_router(maestros_router)
+```
+
+Después de reiniciar FastAPI, Swagger mostrará la sección **Maestros**.
+
+### Errores esperados de Maestros
+
+```text
+400 nombre compuesto únicamente por espacios
+401 JWT ausente, inválido o de un usuario inactivo
+403 usuario autenticado sin permiso
+404 Cargo o Área inexistente
+409 nombre duplicado
+422 estructura o tipos del JSON inválidos
+```
+
+## Módulo Contactos
+
+El módulo Contactos prepara las siguientes historias:
+
+```text
+HU-CON-001 Registrar contacto
+HU-CON-002 Normalizar celular
+HU-CON-003 Seleccionar cargo desde catálogo
+HU-CON-004 Cambiar empresa con historial
+HU-CON-005 Inactivar y reactivar contacto
+HU-CON-006 Fusionar contactos duplicados
+HU-CON-007 Buscar y exportar contactos
+```
+
+Archivos principales:
+
+```text
+app/modules/contactos/models.py
+app/modules/contactos/dto.py
+app/modules/contactos/repository.py
+app/modules/contactos/service.py
+app/modules/contactos/router.py
+app/modules/maestros/models.py
+```
+
+### Modelos utilizados
+
+`Contacto` representa la información vigente del contacto. El nombre completo
+no se persiste desde el DTO: se obtiene mediante `Contacto.nombre_completo`.
+
+```text
+id_contacto
+id_empresa
+id_cargo
+id_tipo_documento
+numero_documento
+apellidos
+nombres
+genero
+celular
+correo
+es_contacto_principal
+estado
+creado_en
+```
+
+`ContactoHistorialEmpresa` conserva las vigencias empresariales:
+
+```text
+id_historial
+id_contacto
+id_empresa
+id_usuario_cambio
+fecha_inicio
+fecha_fin
+motivo
+```
+
+Los catálogos `Cargo` y `Area` se encuentran en
+`app/modules/maestros/models.py`. Contactos valida `Cargo`, pero no crea cargos
+como texto libre.
+
+### DTOs
+
+Los contratos HTTP están separados de SQLAlchemy:
+
+```text
+ContactoCreate
+ContactoUpdate
+ContactoEstadoUpdate
+ContactoCambiarEmpresaRequest
+ContactoFusionRequest
+ContactoResponse
+ContactoListItem
+ContactoPage
+```
+
+El update general no acepta `id_empresa`. El cambio de empresa solo puede
+realizarse mediante la operación específica que registra historial.
+
+### Reglas principales
+
+```text
+La empresa debe existir y estar activa.
+El cargo, cuando se informa, debe existir y estar activo.
+Tipo y número de documento se envían juntos o ambos se omiten.
+El número de documento es único cuando existe.
+Nombres, apellidos y género son obligatorios.
+El contacto se crea activo y genera su primera vigencia empresarial.
+No se eliminan físicamente contactos ni historiales.
+Todas las escrituras críticas se auditan en la misma transacción.
+```
+
+La función reutilizable `normalize_phone()` elimina espacios antes de guardar:
+
+```text
+987 654 321     -> 987654321
+987   654 321   -> 987654321
++51 987 654 321 -> +51987654321
+```
+
+El formato local debe empezar con `9` y tener nueve dígitos. También se admite
+formato internacional con `+` y código de país.
+
+### Permisos RBAC de Contactos
+
+El router utiliza el módulo `CONTACTOS` y estos permisos:
+
+```text
+CREAR_CONTACTO
+CONSULTAR_CONTACTO
+ACTUALIZAR_CONTACTO
+CAMBIAR_EMPRESA_CONTACTO
+CAMBIAR_ESTADO_CONTACTO
+FUSIONAR_CONTACTO
+EXPORTAR_CONTACTO
+```
+
+Estos permisos todavía deben agregarse de forma idempotente a
+`scripts/bootstrap_security.py` y asignarse a los roles internos que
+correspondan.
+
+### Registrar el router de Contactos
+
+Por decisión de alcance, `app/api/router.py` no fue modificado durante la
+implementación del módulo. Para que Contactos aparezca en FastAPI y Swagger hay
+que agregar:
+
+```python
+from app.modules.contactos.router import router as contactos_router
+```
+
+y después de los otros `include_router`:
+
+```python
+api_router.include_router(contactos_router)
+```
+
+Después se debe reiniciar FastAPI y comprobar en `/docs` la sección
+**Contactos**.
+
+### Probar Contactos desde Swagger
+
+Primero iniciar sesión mediante el botón **Authorize** usando un usuario con
+los permisos anteriores. Swagger conservará el Bearer token mientras la página
+permanezca abierta.
+
+#### 1. Registrar contacto
+
+```text
+POST /api/v1/contactos
+```
+
+JSON satisfactorio:
+
+```json
+{
+  "id_empresa": 10,
+  "id_cargo": 3,
+  "id_tipo_documento": 1,
+  "numero_documento": "76543210",
+  "nombres": "Juan Carlos",
+  "apellidos": "Perez Ramos",
+  "genero": "M",
+  "celular": "987 654 321",
+  "correo": "juan.perez@empresa.com",
+  "es_contacto_principal": false
+}
+```
+
+Respuesta `201 Created`:
+
+```json
+{
+  "id_contacto": 1,
+  "id_empresa": 10,
+  "nombre_empresa": "Empresa CODIP",
+  "id_cargo": 3,
+  "nombre_cargo": "Gerente General",
+  "id_tipo_documento": 1,
+  "nombre_tipo_documento": "DNI",
+  "numero_documento": "76543210",
+  "nombres": "Juan Carlos",
+  "apellidos": "Perez Ramos",
+  "nombre_completo": "Perez Ramos Juan Carlos",
+  "genero": "M",
+  "celular": "987654321",
+  "correo": "juan.perez@empresa.com",
+  "es_contacto_principal": false,
+  "estado": true
+}
+```
+
+`id_empresa`, `id_cargo` e `id_tipo_documento` deben existir realmente en la
+base conectada. El alta crea también la primera fila de historial empresarial.
+
+#### 2. Buscar y filtrar contactos
+
+```text
+GET /api/v1/contactos?search=76543210&page=1&page_size=20
+GET /api/v1/contactos?id_empresa=10
+GET /api/v1/contactos?id_cargo=3
+GET /api/v1/contactos?estado=false
+```
+
+La respuesta contiene:
+
+```json
+{
+  "items": [],
+  "total": 0,
+  "page": 1,
+  "page_size": 20,
+  "pages": 0
+}
+```
+
+`search` consulta nombres, apellidos, documento, correo y celular. Los joins de
+empresa, cargo y tipo de documento se resuelven en la consulta para evitar N+1.
+
+#### 3. Consultar o actualizar un contacto
+
+```text
+GET   /api/v1/contactos/{id_contacto}
+PATCH /api/v1/contactos/{id_contacto}
+```
+
+Ejemplo de actualización:
+
+```json
+{
+  "id_cargo": 4,
+  "nombres": "Juan Carlos Alberto",
+  "celular": "+51 987 654 321",
+  "correo": "juan.actualizado@empresa.com"
+}
+```
+
+Solo se actualizan los campos enviados. No se puede cambiar la empresa desde
+este JSON.
+
+#### 4. Cambiar empresa con historial
+
+```text
+PATCH /api/v1/contactos/{id_contacto}/empresa
+```
+
+```json
+{
+  "id_empresa": 25,
+  "motivo": "Cambio laboral"
+}
+```
+
+La operación bloquea el contacto durante la transacción, cierra la vigencia
+anterior, abre una nueva, actualiza `contacto.id_empresa` y registra auditoría.
+Si el contacto no tenía historial, reconstruye la vigencia inicial usando
+`contacto.creado_en`.
+
+#### 5. Inactivar o reactivar
+
+```text
+PATCH /api/v1/contactos/{id_contacto}/estado
+```
+
+Inactivar:
+
+```json
+{
+  "estado": false,
+  "motivo": "Baja administrativa"
+}
+```
+
+Reactivar:
+
+```json
+{
+  "estado": true,
+  "motivo": "Reincorporación"
+}
+```
+
+El registro y su historial permanecen en PostgreSQL.
+
+#### 6. Fusionar duplicados
+
+```text
+POST /api/v1/contactos/fusionar
+```
+
+```json
+{
+  "id_contacto_principal": 10,
+  "id_contacto_duplicado": 22,
+  "motivo": "Duplicidad detectada"
+}
+```
+
+El principal se conserva. El duplicado no se elimina: queda inactivo, se cierra
+su vigencia empresarial y se registra `FUSIONAR_CONTACTO` en auditoría.
+
+Actualmente no se migran relaciones de Eventos o Participantes porque esos
+módulos todavía no existen. El model tampoco tiene un campo permanente como
+`fusionado_en`; por ello esa parte deberá ampliarse cuando existan las futuras
+relaciones.
+
+#### 7. Exportar CSV
+
+```text
+GET /api/v1/contactos/exportar
+```
+
+Admite los mismos filtros principales del listado y descarga
+`contactos.csv` codificado en UTF-8.
+
+### Errores esperados de Contactos
+
+```text
+400 empresa/cargo inactivo, celular inválido o documento incompleto
+401 JWT ausente, inválido o perteneciente a un usuario inactivo
+403 usuario autenticado sin el permiso requerido
+404 contacto, empresa, cargo o tipo de documento inexistente
+409 documento duplicado, misma empresa o conflicto de persistencia
+422 JSON o tipos inválidos
+```
+
+### Registro de tablas para desarrollo
+
+`scripts/create_db.py` importa por side effect:
+
+```text
+app.modules.maestros.models
+app.modules.contactos.models
+```
+
+Por ello una instalación local limpia puede registrar también:
+
+```text
+cargo
+area
+contacto
+contacto_historial_empresa
+```
+
+Comando, solo para una BD local de desarrollo o test:
+
+```bash
+python3 scripts/create_db.py
+```
+
+`create_all()` crea tablas faltantes, pero no reemplaza un sistema de
+migraciones ni corrige tablas existentes.
+
+### Incompatibilidad conocida del historial
+
+Existe una diferencia que no debe ignorarse:
+
+```text
+SistemaEventosCODIP_postgresql.sql  -> contacto_empresa_historial
+app/modules/contactos/models.py     -> contacto_historial_empresa
+```
+
+También cambian los nombres de sus columnas:
+
+```text
+SQL:   id_contacto_empresa_historial, vigente_desde, vigente_hasta, id_usuario
+Model: id_historial, fecha_inicio, fecha_fin, id_usuario_cambio
+```
+
+El repository implementado respeta el model existente, según la restricción de
+no modificar models ni esquema. Antes de usar HU-CON-004 sobre una BD creada
+únicamente con el SQL histórico, el equipo debe decidir cuál representación es
+la oficial y resolverla mediante una migración controlada. Ejecutar
+`create_db.py` sin esa decisión puede crear una segunda tabla de historial con
+semántica equivalente.
+
 ## Errores comunes de base de datos
 
 Si aparece un error similar a:
@@ -643,12 +1331,12 @@ verifica que FastAPI esté conectado a la misma base creada con `SistemaEventosC
 
 ```text
 200 operación correcta
-201 usuario creado
-400 regla inválida, por ejemplo contraseñas distintas o política incumplida
+201 recurso creado
+400 regla de negocio inválida o dato incompatible
 401 autenticación inválida, token inválido o usuario inactivo
 403 usuario autenticado sin permiso
-404 recurso administrativo no encontrado
-409 username o correo duplicado
+404 recurso solicitado no encontrado
+409 dato duplicado, misma asociación o dependencia activa
 422 error de validación del JSON
 ```
 
@@ -663,12 +1351,19 @@ test/modules/usuarios/test_hu_usr_003_recuperacion.py
 test/modules/usuarios/test_hu_usr_004_crear_usuario.py
 test/modules/usuarios/test_hu_usr_005_inactivar_usuario.py
 test/modules/usuarios/test_flujo_primer_ingreso_dni.py
+test/modules/grupos/
+test/modules/categorias/
+test/modules/empresas/
+test/modules/contactos/
+test/modules/maestros/test_cargos.py
+test/modules/maestros/test_areas.py
 ```
 
 Fixture principal:
 
 ```text
 test/modules/usuarios/conftest.py
+test/modules/contactos/conftest.py
 ```
 
 Los tests usan PostgreSQL con un esquema temporal por ejecución:
@@ -753,10 +1448,81 @@ JWT anterior deja de funcionar después de la inactivación
 
 ```bash
 .venv/bin/python -m pytest test/modules/usuarios -q
+.venv/bin/python -m pytest test/modules/grupos test/modules/categorias -q
+.venv/bin/python -m pytest test/modules/empresas -q
+.venv/bin/python -m pytest test/modules/contactos -q
+.venv/bin/python -m pytest test/modules/maestros -v
+.venv/bin/python -m pytest -q
 ```
 
-Resultado esperado con PostgreSQL disponible:
+Estado de la colección actual:
 
 ```text
-42 passed
+43 tests de Usuarios
+35 tests de Grupos, Categorías y Empresas
+33 tests de Contactos
+20 tests de Maestros
+131 tests totales aprobados
 ```
+
+Los tests de Maestros cubren:
+
+```text
+crear Cargo y Área correctamente
+normalización de nombres y descripciones
+nombre obligatorio y rechazo de valores vacíos
+duplicados ignorando mayúsculas y espacios
+consulta por identificador
+404 para recursos inexistentes
+listados paginados
+búsqueda por nombre
+filtro estado=true
+actualización y auditoría de valores anterior/nuevo
+rechazo de nombres duplicados al actualizar
+inactivación sin eliminación física
+catálogos inactivos excluidos del filtro de activos
+reactivación e idempotencia de estado
+403 para usuarios sin permiso
+```
+
+Resultado real de la ejecución del módulo:
+
+```text
+20 passed in 19.48s
+```
+
+Resultado real de la regresión completa:
+
+```text
+131 passed in 127.42s
+```
+
+Los tests de Contactos cubren:
+
+```text
+alta correcta y auditoría
+empresa inexistente o inactiva
+documento duplicado
+cargo inexistente o inactivo
+normalización y rechazo de celulares
+cambio de empresa e historial vigente único
+reconstrucción de vigencia inicial faltante
+inactivación y reactivación
+actualización parcial
+fusión sin eliminación física
+búsqueda y filtros
+paginación y exportación CSV
+registro de metadata en create_db.py
+401 sin autenticación y 403 sin permiso
+```
+
+La colección puede verificarse sin conectarse a PostgreSQL:
+
+```bash
+.venv/bin/python -m pytest --collect-only -q
+```
+
+Las pruebas de integración crean un esquema PostgreSQL temporal por caso y lo
+eliminan al finalizar. La conexión configurada debe permitir `CREATE SCHEMA` y
+`DROP SCHEMA`; nunca se deben ejecutar estas pruebas apuntando a una BD de
+producción.

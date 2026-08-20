@@ -26,6 +26,8 @@ if str(ROOT) not in sys.path:
 from sqlalchemy.ext.asyncio import create_async_engine
 from app.db.base import Base
 from app.core.config import settings
+from app.modules.contactos import models as contactos_models  # noqa: E402,F401
+from app.modules.maestros import models as maestros_models  # noqa: E402,F401
 
 
 async def create_tables() -> None:
