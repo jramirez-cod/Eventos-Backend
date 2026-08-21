@@ -19,6 +19,14 @@ class EmpresaCreateDTO(BaseModel):
     nombre_comercial: str | None = Field(default=None, max_length=180)
 
 
+class EmpresaUpdateDTO(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    nombre_empresa: str = Field(min_length=1, max_length=180)
+    razon_social: str | None = Field(default=None, max_length=250)
+    nombre_comercial: str | None = Field(default=None, max_length=180)
+
+
 class EmpresaResponseDTO(BaseModel):
     id_empresa: int
     nombre_empresa: str

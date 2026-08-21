@@ -3,7 +3,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.modules.auditoria.repository import AuditoriaRepository
 from app.modules.categorias.models import Categoria
 from app.modules.categorias.repository import CategoriaRepository
-from app.modules.empresas.dto import CambiarClasificacionDTO, EmpresaCreateDTO
+from app.modules.empresas.dto import (
+    CambiarClasificacionDTO,
+    EmpresaCreateDTO,
+    EmpresaUpdateDTO,
+)
 from app.modules.empresas.models import Empresa, EmpresaHistorialClasificacion
 from app.modules.empresas.repository import EmpresaRepository
 from app.modules.empresas.ruc_client import RucConsultor, RucInfo, get_ruc_consultor
@@ -28,6 +32,10 @@ class DuplicateRucError(EmpresaServiceError):
 
 
 class DetalleCategoriaInvalidoError(EmpresaServiceError):
+    pass
+
+
+class InvalidEmpresaNameError(EmpresaServiceError):
     pass
 
 
@@ -89,6 +97,49 @@ class EmpresaService:
 
         _, grupo, categoria = detalle_completo
         return empresa, grupo, categoria
+
+    async def obtener_empresa(
+        self, id_empresa: int
+    ) -> tuple[Empresa, Grupo, Categoria]:
+        detallado = await self.empresas.get_detallado(id_empresa)
+        if detallado is None:
+            raise EmpresaNotFoundError("Empresa no encontrada.")
+        return detallado
+
+    async def actualizar_empresa(
+        self, *, id_empresa: int, data: EmpresaUpdateDTO, actor: Usuario
+    ) -> tuple[Empresa, Grupo, Categoria]:
+        empresa, _, _ = await self.obtener_empresa(id_empresa)
+        nombre_empresa = self._normalize_required_text(
+            data.nombre_empresa,
+            field_name="nombre de la empresa",
+        )
+        razon_social = self._normalize_optional_text(data.razon_social)
+        nombre_comercial = self._normalize_optional_text(data.nombre_comercial)
+        anterior = self._audit_values(empresa)
+
+        try:
+            await self.empresas.update_general(
+                empresa,
+                nombre_empresa=nombre_empresa,
+                razon_social=razon_social,
+                nombre_comercial=nombre_comercial,
+            )
+            await self.auditoria.create(
+                id_usuario=actor.id_usuario,
+                id_modulo=await self._id_modulo(),
+                entidad="empresa",
+                id_entidad=empresa.id_empresa,
+                accion="ACTUALIZAR_EMPRESA",
+                valor_anterior=anterior,
+                valor_nuevo=self._audit_values(empresa),
+            )
+            await self.db.commit()
+        except Exception:
+            await self.db.rollback()
+            raise
+
+        return await self.obtener_empresa(id_empresa)
 
     async def cambiar_clasificacion(
         self, *, id_empresa: int, data: CambiarClasificacionDTO, actor: Usuario
@@ -212,3 +263,29 @@ class EmpresaService:
     async def _id_modulo(self) -> int | None:
         modulo = await self.usuarios.get_module_by_name(MODULO_EMPRESAS)
         return modulo.id_modulo if modulo else None
+
+    @staticmethod
+    def _normalize_required_text(value: str, *, field_name: str) -> str:
+        normalized = " ".join(value.split())
+        if not normalized:
+            raise InvalidEmpresaNameError(f"El {field_name} es obligatorio.")
+        return normalized
+
+    @staticmethod
+    def _normalize_optional_text(value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+    @staticmethod
+    def _audit_values(empresa: Empresa) -> dict[str, object]:
+        return {
+            "id_empresa": empresa.id_empresa,
+            "nombre_empresa": empresa.nombre_empresa,
+            "razon_social": empresa.razon_social,
+            "nombre_comercial": empresa.nombre_comercial,
+            "ruc": empresa.ruc,
+            "id_detalle_categoria": empresa.id_detalle_categoria,
+            "estado": empresa.estado,
+        }

@@ -1,4 +1,4 @@
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.categorias.models import DetalleCategoria
@@ -13,8 +13,14 @@ class GrupoRepository:
     async def get_by_id(self, id_grupo: int) -> Grupo | None:
         return await self.db.get(Grupo, id_grupo)
 
-    async def get_by_nombre(self, nombre_grupo: str) -> Grupo | None:
-        stmt = select(Grupo).where(Grupo.nombre_grupo == nombre_grupo)
+    async def get_by_nombre(
+        self, nombre_grupo: str, *, exclude_id: int | None = None
+    ) -> Grupo | None:
+        stmt = select(Grupo).where(
+            func.lower(Grupo.nombre_grupo) == nombre_grupo.lower()
+        )
+        if exclude_id is not None:
+            stmt = stmt.where(Grupo.id_grupo != exclude_id)
         return await self.db.scalar(stmt)
 
     async def list_all(self) -> list[Grupo]:
@@ -37,6 +43,18 @@ class GrupoRepository:
 
     async def set_estado(self, grupo: Grupo, *, estado: bool) -> Grupo:
         grupo.estado = estado
+        await self.db.flush()
+        return grupo
+
+    async def update(
+        self,
+        grupo: Grupo,
+        *,
+        nombre_grupo: str,
+        descripcion: str | None,
+    ) -> Grupo:
+        grupo.nombre_grupo = nombre_grupo
+        grupo.descripcion = descripcion
         await self.db.flush()
         return grupo
 

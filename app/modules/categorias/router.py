@@ -5,6 +5,7 @@ from app.db.session import get_db
 from app.modules.categorias.dto import (
     CategoriaCreateDTO,
     CategoriaResponseDTO,
+    CategoriaUpdateDTO,
     InactivarCategoriaDTO,
 )
 from app.modules.categorias.models import Categoria
@@ -14,6 +15,7 @@ from app.modules.categorias.service import (
     CategoriaNotFoundError,
     CategoriaService,
     DuplicateCategoriaNameError,
+    InvalidCategoriaNameError,
 )
 from app.modules.usuarios.dependencies import require_permission
 from app.modules.usuarios.models import Usuario
@@ -36,6 +38,22 @@ async def listar_categorias(
     return await CategoriaRepository(db).list_all()
 
 
+@router.get("/{id_categoria}", response_model=CategoriaResponseDTO)
+async def obtener_categoria(
+    id_categoria: int,
+    actor: Usuario = Depends(
+        require_permission(MODULO_CATEGORIAS, PERMISO_CREAR_CATEGORIA)
+    ),
+    db: AsyncSession = Depends(get_db),
+) -> Categoria:
+    try:
+        return await CategoriaService(db).obtener_categoria(id_categoria)
+    except CategoriaNotFoundError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Categoría no encontrada."
+        )
+
+
 @router.post(
     "", response_model=CategoriaResponseDTO, status_code=status.HTTP_201_CREATED
 )
@@ -53,6 +71,34 @@ async def crear_categoria(
             status_code=status.HTTP_409_CONFLICT,
             detail="El nombre de la categoría ya existe.",
         )
+
+
+@router.put("/{id_categoria}", response_model=CategoriaResponseDTO)
+async def actualizar_categoria(
+    id_categoria: int,
+    data: CategoriaUpdateDTO,
+    actor: Usuario = Depends(
+        require_permission(MODULO_CATEGORIAS, PERMISO_CREAR_CATEGORIA)
+    ),
+    db: AsyncSession = Depends(get_db),
+) -> Categoria:
+    try:
+        return await CategoriaService(db).actualizar_categoria(
+            id_categoria=id_categoria,
+            data=data,
+            actor=actor,
+        )
+    except CategoriaNotFoundError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Categoría no encontrada."
+        )
+    except DuplicateCategoriaNameError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="El nombre de la categoría ya existe.",
+        )
+    except InvalidCategoriaNameError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
 
 @router.patch("/{id_categoria}/inactivar", response_model=CategoriaResponseDTO)

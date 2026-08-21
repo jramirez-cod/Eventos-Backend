@@ -1,4 +1,4 @@
-from sqlalchemy import case, select
+from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.categorias.models import Categoria, DetalleCategoria
@@ -16,8 +16,14 @@ class CategoriaRepository:
     async def get_by_id(self, id_categoria: int) -> Categoria | None:
         return await self.db.get(Categoria, id_categoria)
 
-    async def get_by_nombre(self, nombre_categoria: str) -> Categoria | None:
-        stmt = select(Categoria).where(Categoria.nombre_categoria == nombre_categoria)
+    async def get_by_nombre(
+        self, nombre_categoria: str, *, exclude_id: int | None = None
+    ) -> Categoria | None:
+        stmt = select(Categoria).where(
+            func.lower(Categoria.nombre_categoria) == nombre_categoria.lower()
+        )
+        if exclude_id is not None:
+            stmt = stmt.where(Categoria.id_categoria != exclude_id)
         return await self.db.scalar(stmt)
 
     async def list_all(self) -> list[Categoria]:
@@ -45,6 +51,18 @@ class CategoriaRepository:
 
     async def set_estado(self, categoria: Categoria, *, estado: bool) -> Categoria:
         categoria.estado = estado
+        await self.db.flush()
+        return categoria
+
+    async def update(
+        self,
+        categoria: Categoria,
+        *,
+        nombre_categoria: str,
+        descripcion: str | None,
+    ) -> Categoria:
+        categoria.nombre_categoria = nombre_categoria
+        categoria.descripcion = descripcion
         await self.db.flush()
         return categoria
 

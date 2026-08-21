@@ -1,6 +1,6 @@
 from functools import lru_cache
 
-from pydantic import SecretStr
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy import URL
 
@@ -30,6 +30,11 @@ class Settings(BaseSettings):
     app_host: str = "0.0.0.0"
     app_port: int = 8000
     app_debug: bool = False
+    cors_allowed_origins: str = (
+        "http://localhost:4200,http://127.0.0.1:4200,"
+        "http://localhost:8001,http://127.0.0.1:8001"
+    )
+    cors_allow_localhost_any_port: bool = False
 
     # Seguridad
     secret_key: str = ""
@@ -61,9 +66,10 @@ class Settings(BaseSettings):
     smtp_timeout_seconds: int = 20
     smtp_app_password: SecretStr = SecretStr("")
 
-    # Consulta de RUC (Factiliza)
+    # Consultas de documentos (Factiliza)
     factiliza_base_url: str = "https://api.factiliza.com/v1"
     factiliza_api_token: SecretStr = SecretStr("")
+    factiliza_timeout_seconds: float = Field(default=15.0, gt=0)
 
     @property
     def database_url(self) -> URL:
@@ -80,6 +86,20 @@ class Settings(BaseSettings):
             port=self.pgport,
             database=self.pgdatabase,
         )
+
+    @property
+    def cors_origins(self) -> list[str]:
+        return [
+            origin.strip().rstrip("/")
+            for origin in self.cors_allowed_origins.split(",")
+            if origin.strip()
+        ]
+
+    @property
+    def cors_origin_regex(self) -> str | None:
+        if not self.cors_allow_localhost_any_port:
+            return None
+        return r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$"
 
 
 @lru_cache

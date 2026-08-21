@@ -95,6 +95,20 @@ class EmpresaRepository:
         await self.db.flush()
         return empresa
 
+    async def update_general(
+        self,
+        empresa: Empresa,
+        *,
+        nombre_empresa: str,
+        razon_social: str | None,
+        nombre_comercial: str | None,
+    ) -> Empresa:
+        empresa.nombre_empresa = nombre_empresa
+        empresa.razon_social = razon_social
+        empresa.nombre_comercial = nombre_comercial
+        await self.db.flush()
+        return empresa
+
     async def update_clasificacion(
         self, empresa: Empresa, *, id_detalle_categoria: int
     ) -> Empresa:

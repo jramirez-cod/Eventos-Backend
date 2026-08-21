@@ -10,6 +10,7 @@ from app.modules.empresas.dto import (
     EmpresaCreateDTO,
     EmpresaHistorialResponseDTO,
     EmpresaResponseDTO,
+    EmpresaUpdateDTO,
     InactivarEmpresaDTO,
 )
 from app.modules.empresas.repository import EmpresaRepository
@@ -19,6 +20,7 @@ from app.modules.empresas.service import (
     DuplicateRucError,
     EmpresaNotFoundError,
     EmpresaService,
+    InvalidEmpresaNameError,
 )
 from app.modules.usuarios.dependencies import require_permission
 from app.modules.usuarios.models import Usuario
@@ -68,7 +70,11 @@ async def listar_empresas(
     return [_to_response(empresa, grupo, categoria) for empresa, grupo, categoria in filas]
 
 
-@router.get("/consultar-ruc/{ruc}", response_model=ConsultaRucResponseDTO)
+@router.get(
+    "/consultar-ruc/{ruc}",
+    response_model=ConsultaRucResponseDTO,
+    deprecated=True,
+)
 async def consultar_ruc(
     ruc: Annotated[str, Path(pattern=r"^\d{11}$")],
     actor: Usuario = Depends(
@@ -98,6 +104,23 @@ async def consultar_ruc(
     )
 
 
+@router.get("/{id_empresa}", response_model=EmpresaResponseDTO)
+async def obtener_empresa(
+    id_empresa: int,
+    actor: Usuario = Depends(
+        require_permission(MODULO_EMPRESAS, PERMISO_CREAR_EMPRESA)
+    ),
+    db: AsyncSession = Depends(get_db),
+) -> EmpresaResponseDTO:
+    try:
+        detallado = await EmpresaService(db).obtener_empresa(id_empresa)
+    except EmpresaNotFoundError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Empresa no encontrada."
+        )
+    return _to_response(*detallado)
+
+
 @router.post(
     "", response_model=EmpresaResponseDTO, status_code=status.HTTP_201_CREATED
 )
@@ -122,6 +145,30 @@ async def crear_empresa(
         )
 
     return _to_response(empresa, grupo, categoria)
+
+
+@router.put("/{id_empresa}", response_model=EmpresaResponseDTO)
+async def actualizar_empresa(
+    id_empresa: int,
+    data: EmpresaUpdateDTO,
+    actor: Usuario = Depends(
+        require_permission(MODULO_EMPRESAS, PERMISO_CREAR_EMPRESA)
+    ),
+    db: AsyncSession = Depends(get_db),
+) -> EmpresaResponseDTO:
+    try:
+        detallado = await EmpresaService(db).actualizar_empresa(
+            id_empresa=id_empresa,
+            data=data,
+            actor=actor,
+        )
+    except EmpresaNotFoundError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Empresa no encontrada."
+        )
+    except InvalidEmpresaNameError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    return _to_response(*detallado)
 
 
 @router.patch("/{id_empresa}/inactivar", response_model=EmpresaResponseDTO)

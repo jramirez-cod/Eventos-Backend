@@ -36,6 +36,8 @@ APP_VERSION=1.0.0
 APP_HOST=0.0.0.0
 APP_PORT=8000
 APP_DEBUG=false
+CORS_ALLOWED_ORIGINS=http://localhost:4200,http://127.0.0.1:4200
+CORS_ALLOW_LOCALHOST_ANY_PORT=false
 
 SECRET_KEY=coloca-un-secreto-largo-y-seguro
 JWT_ALGORITHM=HS256
@@ -62,6 +64,18 @@ SMTP_PORT=587
 SMTP_STARTTLS=true
 SMTP_APP_PASSWORD=...
 ```
+
+`CORS_ALLOWED_ORIGINS` contiene los orígenes exactos permitidos, separados por
+comas. Si el servidor de desarrollo del frontend utiliza un puerto dinámico,
+puede activarse localmente:
+
+```env
+CORS_ALLOW_LOCALHOST_ANY_PORT=true
+```
+
+Ese flag solo acepta `localhost` y `127.0.0.1` con cualquier puerto. Debe
+permanecer en `false` en producción, donde se deben declarar los dominios
+exactos en `CORS_ALLOWED_ORIGINS`.
 
 `SECRET_KEY` es obligatorio para login, JWT, cambio de contraseña y recuperación. No debe subirse al repositorio.
 
@@ -641,7 +655,9 @@ Rutas principales:
 
 ```text
 GET    /api/v1/grupos
+GET    /api/v1/grupos/{id_grupo}
 POST   /api/v1/grupos
+PUT    /api/v1/grupos/{id_grupo}
 PATCH  /api/v1/grupos/{id_grupo}/inactivar
 PATCH  /api/v1/grupos/{id_grupo}/reactivar
 GET    /api/v1/grupos/{id_grupo}/categorias
@@ -649,12 +665,16 @@ POST   /api/v1/grupos/{id_grupo}/categorias
 PATCH  /api/v1/grupos/{id_grupo}/categorias/{id_categoria}/quitar
 
 GET    /api/v1/categorias
+GET    /api/v1/categorias/{id_categoria}
 POST   /api/v1/categorias
+PUT    /api/v1/categorias/{id_categoria}
 PATCH  /api/v1/categorias/{id_categoria}/inactivar
 PATCH  /api/v1/categorias/{id_categoria}/reactivar
 
 GET    /api/v1/empresas
+GET    /api/v1/empresas/{id_empresa}
 POST   /api/v1/empresas
+PUT    /api/v1/empresas/{id_empresa}
 GET    /api/v1/empresas/consultar-ruc/{ruc}
 PATCH  /api/v1/empresas/{id_empresa}/inactivar
 PATCH  /api/v1/empresas/{id_empresa}/reactivar
@@ -665,6 +685,147 @@ GET    /api/v1/empresas/{id_empresa}/historial
 El bootstrap actual registra los módulos y permisos de Grupos, Categorías y
 Empresas. Todos estos endpoints requieren un JWT `access` y el permiso RBAC
 correspondiente.
+
+Los endpoints de actualización reciben únicamente campos generales.
+
+`PUT /api/v1/grupos/10`:
+
+```json
+{
+  "nombre_grupo": "Asociados estratégicos",
+  "descripcion": "Empresas asociadas a CODIP"
+}
+```
+
+`PUT /api/v1/categorias/3`:
+
+```json
+{
+  "nombre_categoria": "Categoría A",
+  "descripcion": "Categoría principal"
+}
+```
+
+`PUT /api/v1/empresas/25`:
+
+```json
+{
+  "nombre_empresa": "Agrolight Perú",
+  "razon_social": "AGROLIGHT PERU S.A.C.",
+  "nombre_comercial": "Agrolight"
+}
+```
+
+Los DTO de actualización rechazan propiedades adicionales. ID y estado no se
+modifican por PUT; en Empresa tampoco se aceptan RUC ni clasificación. El estado
+y la clasificación conservan sus endpoints específicos. Cada actualización se
+ejecuta junto con su auditoría dentro de una transacción.
+
+## Integración Factiliza
+
+La consulta al proveedor externo Factiliza está aislada en un módulo sin
+modelos SQLAlchemy ni tablas propias:
+
+```text
+app/modules/factiliza/
+├── __init__.py
+├── client.py
+├── dto.py
+├── service.py
+└── router.py
+```
+
+El backend conserva el token del proveedor y expone contratos propios al
+frontend. Las consultas no persisten la respuesta en PostgreSQL y requieren un
+JWT `access` de un usuario interno activo.
+
+Variables de entorno:
+
+```env
+FACTILIZA_BASE_URL=https://api.factiliza.com/v1
+FACTILIZA_API_TOKEN=token-entregado-por-factiliza
+FACTILIZA_TIMEOUT_SECONDS=15
+```
+
+Nunca envíes `FACTILIZA_API_TOKEN` desde Swagger o el frontend. El backend lo
+agrega al header `Authorization: Bearer` de la petición al proveedor.
+
+### Consultar RUC
+
+```http
+GET /api/v1/factiliza/ruc/{ruc}
+Authorization: Bearer <access_token_del_sistema>
+```
+
+```bash
+curl -X GET \
+  'http://127.0.0.1:8000/api/v1/factiliza/ruc/20552103816' \
+  -H 'accept: application/json' \
+  -H 'Authorization: Bearer <access_token_del_sistema>'
+```
+
+El RUC debe tener exactamente 11 dígitos. La respuesta incluye razón social,
+estado, condición, dirección y ubigeo devueltos por Factiliza.
+
+### Consultar DNI
+
+```http
+GET /api/v1/factiliza/dni/{dni}
+Authorization: Bearer <access_token_del_sistema>
+```
+
+```bash
+curl -X GET \
+  'http://127.0.0.1:8000/api/v1/factiliza/dni/27427864' \
+  -H 'accept: application/json' \
+  -H 'Authorization: Bearer <access_token_del_sistema>'
+```
+
+El DNI debe tener exactamente 8 dígitos. La respuesta incluye nombres,
+apellidos y los datos de ubicación disponibles.
+
+### Consultar carné de extranjería
+
+```http
+GET /api/v1/factiliza/carnet-extranjeria/{carnet}
+Authorization: Bearer <access_token_del_sistema>
+```
+
+```bash
+curl -X GET \
+  'http://127.0.0.1:8000/api/v1/factiliza/carnet-extranjeria/001077238' \
+  -H 'accept: application/json' \
+  -H 'Authorization: Bearer <access_token_del_sistema>'
+```
+
+Se aceptan entre 1 y 20 caracteres alfanuméricos. El valor se normaliza a
+mayúsculas antes de consultar al proveedor.
+
+Respuestas HTTP comunes:
+
+```text
+200 consulta satisfactoria
+401 access token del Sistema Eventos ausente o inválido
+404 documento no encontrado por Factiliza
+422 formato del documento inválido
+503 proveedor no disponible, token del proveedor inválido o respuesta inesperada
+```
+
+La ruta anterior:
+
+```text
+GET /api/v1/empresas/consultar-ruc/{ruc}
+```
+
+continúa disponible temporalmente para compatibilidad, aparece como obsoleta
+en OpenAPI y delega el consumo HTTP al nuevo cliente. Las integraciones nuevas
+deben usar `/api/v1/factiliza/ruc/{ruc}`.
+
+Tests del módulo, sin consumir la API real:
+
+```bash
+.venv/bin/python -m pytest test/modules/factiliza -q
+```
 
 ## Módulo Maestros
 
@@ -1459,10 +1620,12 @@ Estado de la colección actual:
 
 ```text
 43 tests de Usuarios
-35 tests de Grupos, Categorías y Empresas
+53 tests de Grupos, Categorías y Empresas
 33 tests de Contactos
 20 tests de Maestros
-131 tests totales aprobados
+20 tests de Factiliza
+3 tests del verificador de dependencias de borrado
+172 tests totales aprobados
 ```
 
 Los tests de Maestros cubren:
@@ -1494,7 +1657,7 @@ Resultado real de la ejecución del módulo:
 Resultado real de la regresión completa:
 
 ```text
-131 passed in 127.42s
+172 passed in 113.51s
 ```
 
 Los tests de Contactos cubren:
@@ -1526,3 +1689,27 @@ Las pruebas de integración crean un esquema PostgreSQL temporal por caso y lo
 eliminan al finalizar. La conexión configurada debe permitir `CREATE SCHEMA` y
 `DROP SCHEMA`; nunca se deben ejecutar estas pruebas apuntando a una BD de
 producción.
+
+## Auditoría de cobertura CRUD y borrado
+
+La matriz actual de operaciones por recurso, las diferencias entre la base
+real y el SQL canónico, y la política recomendada de baja lógica están en:
+
+```text
+CRUD_COVERAGE.md
+```
+
+Antes de diseñar un DELETE físico puede ejecutarse el verificador de solo
+lectura:
+
+```bash
+.venv/bin/python scripts/check_delete_dependencies.py \
+  --table grupo \
+  --id 10 \
+  --include-empty
+```
+
+El script no elimina ni modifica datos. Inspecciona las claves foráneas reales
+de PostgreSQL y devuelve las tablas/columnas que bloquean el borrado. Un
+resultado `can_delete=true` no reemplaza las reglas de negocio ni la revisión
+del historial de auditoría.

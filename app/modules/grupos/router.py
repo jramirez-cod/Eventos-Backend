@@ -8,6 +8,7 @@ from app.modules.grupos.dto import (
     CategoriaAsignadaResponseDTO,
     GrupoCreateDTO,
     GrupoResponseDTO,
+    GrupoUpdateDTO,
     InactivarGrupoDTO,
 )
 from app.modules.grupos.models import Grupo
@@ -21,6 +22,7 @@ from app.modules.grupos.service import (
     GrupoEnUsoError,
     GrupoNotFoundError,
     GrupoService,
+    InvalidGrupoNameError,
 )
 from app.modules.usuarios.dependencies import require_permission
 from app.modules.usuarios.models import Usuario
@@ -41,6 +43,20 @@ async def listar_grupos(
     return await GrupoRepository(db).list_all()
 
 
+@router.get("/{id_grupo}", response_model=GrupoResponseDTO)
+async def obtener_grupo(
+    id_grupo: int,
+    actor: Usuario = Depends(require_permission(MODULO_GRUPOS, PERMISO_CREAR_GRUPO)),
+    db: AsyncSession = Depends(get_db),
+) -> Grupo:
+    try:
+        return await GrupoService(db).obtener_grupo(id_grupo)
+    except GrupoNotFoundError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Grupo no encontrado."
+        )
+
+
 @router.post("", response_model=GrupoResponseDTO, status_code=status.HTTP_201_CREATED)
 async def crear_grupo(
     data: GrupoCreateDTO,
@@ -58,6 +74,32 @@ async def crear_grupo(
             status_code=status.HTTP_409_CONFLICT,
             detail="El nombre del grupo ya existe.",
         )
+
+
+@router.put("/{id_grupo}", response_model=GrupoResponseDTO)
+async def actualizar_grupo(
+    id_grupo: int,
+    data: GrupoUpdateDTO,
+    actor: Usuario = Depends(require_permission(MODULO_GRUPOS, PERMISO_CREAR_GRUPO)),
+    db: AsyncSession = Depends(get_db),
+) -> Grupo:
+    try:
+        return await GrupoService(db).actualizar_grupo(
+            id_grupo=id_grupo,
+            data=data,
+            actor=actor,
+        )
+    except GrupoNotFoundError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Grupo no encontrado."
+        )
+    except DuplicateGrupoNameError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="El nombre del grupo ya existe.",
+        )
+    except InvalidGrupoNameError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
 
 @router.patch("/{id_grupo}/inactivar", response_model=GrupoResponseDTO)

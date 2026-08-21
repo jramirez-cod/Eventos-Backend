@@ -1,3 +1,4 @@
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.auditoria.repository import AuditoriaRepository
@@ -6,6 +7,7 @@ from app.modules.categorias.repository import CategoriaRepository
 from app.modules.grupos.dto import (
     AsignarCategoriaDTO,
     GrupoCreateDTO,
+    GrupoUpdateDTO,
     InactivarGrupoDTO,
 )
 from app.modules.grupos.models import Grupo
@@ -30,6 +32,10 @@ class DuplicateGrupoIdError(GrupoServiceError):
 
 
 class DuplicateGrupoNameError(GrupoServiceError):
+    pass
+
+
+class InvalidGrupoNameError(GrupoServiceError):
     pass
 
 
@@ -89,6 +95,49 @@ class GrupoService:
             await self.db.commit()
             await self.db.refresh(grupo)
             return grupo
+        except Exception:
+            await self.db.rollback()
+            raise
+
+    async def obtener_grupo(self, id_grupo: int) -> Grupo:
+        grupo = await self.grupos.get_by_id(id_grupo)
+        if grupo is None:
+            raise GrupoNotFoundError("Grupo no encontrado.")
+        return grupo
+
+    async def actualizar_grupo(
+        self, *, id_grupo: int, data: GrupoUpdateDTO, actor: Usuario
+    ) -> Grupo:
+        grupo = await self.obtener_grupo(id_grupo)
+        nombre = self._normalize_name(data.nombre_grupo)
+        descripcion = self._normalize_description(data.descripcion)
+        if await self.grupos.get_by_nombre(nombre, exclude_id=id_grupo):
+            raise DuplicateGrupoNameError("El nombre del grupo ya existe.")
+
+        anterior = self._audit_values(grupo)
+        try:
+            await self.grupos.update(
+                grupo,
+                nombre_grupo=nombre,
+                descripcion=descripcion,
+            )
+            await self.auditoria.create(
+                id_usuario=actor.id_usuario,
+                id_modulo=await self._id_modulo(),
+                entidad="grupo",
+                id_entidad=grupo.id_grupo,
+                accion="ACTUALIZAR_GRUPO",
+                valor_anterior=anterior,
+                valor_nuevo=self._audit_values(grupo),
+            )
+            await self.db.commit()
+            await self.db.refresh(grupo)
+            return grupo
+        except IntegrityError as exc:
+            await self.db.rollback()
+            raise DuplicateGrupoNameError(
+                "El nombre del grupo ya existe."
+            ) from exc
         except Exception:
             await self.db.rollback()
             raise
@@ -235,3 +284,26 @@ class GrupoService:
     async def _id_modulo(self) -> int | None:
         modulo = await self.usuarios.get_module_by_name(MODULO_GRUPOS)
         return modulo.id_modulo if modulo else None
+
+    @staticmethod
+    def _normalize_name(value: str) -> str:
+        normalized = " ".join(value.split())
+        if not normalized:
+            raise InvalidGrupoNameError("El nombre del grupo es obligatorio.")
+        return normalized
+
+    @staticmethod
+    def _normalize_description(value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+    @staticmethod
+    def _audit_values(grupo: Grupo) -> dict[str, object]:
+        return {
+            "id_grupo": grupo.id_grupo,
+            "nombre_grupo": grupo.nombre_grupo,
+            "descripcion": grupo.descripcion,
+            "estado": grupo.estado,
+        }

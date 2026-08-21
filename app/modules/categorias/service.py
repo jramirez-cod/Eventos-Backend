@@ -1,7 +1,12 @@
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.auditoria.repository import AuditoriaRepository
-from app.modules.categorias.dto import CategoriaCreateDTO, InactivarCategoriaDTO
+from app.modules.categorias.dto import (
+    CategoriaCreateDTO,
+    CategoriaUpdateDTO,
+    InactivarCategoriaDTO,
+)
 from app.modules.categorias.models import Categoria
 from app.modules.categorias.repository import CategoriaRepository
 from app.modules.usuarios.models import Usuario
@@ -20,6 +25,10 @@ class CategoriaNotFoundError(CategoriaServiceError):
 
 
 class DuplicateCategoriaNameError(CategoriaServiceError):
+    pass
+
+
+class InvalidCategoriaNameError(CategoriaServiceError):
     pass
 
 
@@ -65,6 +74,51 @@ class CategoriaService:
             await self.db.commit()
             await self.db.refresh(categoria)
             return categoria
+        except Exception:
+            await self.db.rollback()
+            raise
+
+    async def obtener_categoria(self, id_categoria: int) -> Categoria:
+        categoria = await self.categorias.get_by_id(id_categoria)
+        if categoria is None:
+            raise CategoriaNotFoundError("Categoría no encontrada.")
+        return categoria
+
+    async def actualizar_categoria(
+        self, *, id_categoria: int, data: CategoriaUpdateDTO, actor: Usuario
+    ) -> Categoria:
+        categoria = await self.obtener_categoria(id_categoria)
+        nombre = self._normalize_name(data.nombre_categoria)
+        descripcion = self._normalize_description(data.descripcion)
+        if await self.categorias.get_by_nombre(nombre, exclude_id=id_categoria):
+            raise DuplicateCategoriaNameError(
+                "El nombre de la categoría ya existe."
+            )
+
+        anterior = self._audit_values(categoria)
+        try:
+            await self.categorias.update(
+                categoria,
+                nombre_categoria=nombre,
+                descripcion=descripcion,
+            )
+            await self.auditoria.create(
+                id_usuario=actor.id_usuario,
+                id_modulo=await self._id_modulo(),
+                entidad="categoria",
+                id_entidad=categoria.id_categoria,
+                accion="ACTUALIZAR_CATEGORIA",
+                valor_anterior=anterior,
+                valor_nuevo=self._audit_values(categoria),
+            )
+            await self.db.commit()
+            await self.db.refresh(categoria)
+            return categoria
+        except IntegrityError as exc:
+            await self.db.rollback()
+            raise DuplicateCategoriaNameError(
+                "El nombre de la categoría ya existe."
+            ) from exc
         except Exception:
             await self.db.rollback()
             raise
@@ -137,3 +191,28 @@ class CategoriaService:
     async def _id_modulo(self) -> int | None:
         modulo = await self.usuarios.get_module_by_name(MODULO_CATEGORIAS)
         return modulo.id_modulo if modulo else None
+
+    @staticmethod
+    def _normalize_name(value: str) -> str:
+        normalized = " ".join(value.split())
+        if not normalized:
+            raise InvalidCategoriaNameError(
+                "El nombre de la categoría es obligatorio."
+            )
+        return normalized
+
+    @staticmethod
+    def _normalize_description(value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+    @staticmethod
+    def _audit_values(categoria: Categoria) -> dict[str, object]:
+        return {
+            "id_categoria": categoria.id_categoria,
+            "nombre_categoria": categoria.nombre_categoria,
+            "descripcion": categoria.descripcion,
+            "estado": categoria.estado,
+        }
