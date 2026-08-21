@@ -241,6 +241,20 @@ async def _ensure_admin_user(
         return admin
 
 
+async def _get_existing_admin_user(*, rol: Rol) -> Usuario | None:
+    async with AsyncSessionLocal() as session:
+        existing = await session.scalar(
+            select(Usuario)
+            .where(Usuario.id_rol == rol.id_rol)
+            .order_by(Usuario.id_usuario)
+        )
+        if existing is not None and not existing.estado:
+            existing.estado = True
+            await session.commit()
+            await session.refresh(existing)
+        return existing
+
+
 def _resolve_admin_args(args: argparse.Namespace) -> dict[str, str]:
     username = args.username or getenv("BOOTSTRAP_ADMIN_USERNAME")
     email = args.email or getenv("BOOTSTRAP_ADMIN_EMAIL")
@@ -248,19 +262,23 @@ def _resolve_admin_args(args: argparse.Namespace) -> dict[str, str]:
     apellidos = args.apellidos or getenv("BOOTSTRAP_ADMIN_APELLIDOS") or "Eventos"
     numero_documento = args.documento or getenv("BOOTSTRAP_ADMIN_DOCUMENTO")
     password = getenv("BOOTSTRAP_ADMIN_PASSWORD")
+    interactive = sys.stdin.isatty()
 
-    if not username:
+    if not username and interactive:
         username = input("Usuario administrador: ").strip()
-    if not email:
+    if not email and interactive:
         email = input("Correo administrador: ").strip()
-    if not numero_documento:
+    if not numero_documento and interactive:
         numero_documento = input("Número de documento (DNI) administrador: ").strip()
-    if not password:
+    if not password and interactive:
         password = getpass("Password administrador: ")
 
     if not username or not email or not password or not numero_documento:
         raise ValueError(
-            "Usuario, correo, número de documento y password administrador son obligatorios."
+            "Usuario, correo, número de documento y password administrador son "
+            "obligatorios. En Docker configúralos con BOOTSTRAP_ADMIN_USERNAME, "
+            "BOOTSTRAP_ADMIN_EMAIL, BOOTSTRAP_ADMIN_PASSWORD y "
+            "BOOTSTRAP_ADMIN_DOCUMENTO."
         )
 
     return {
@@ -275,7 +293,6 @@ def _resolve_admin_args(args: argparse.Namespace) -> dict[str, str]:
 
 async def bootstrap(args: argparse.Namespace) -> None:
     await _ensure_schema_exists()
-    admin_args = _resolve_admin_args(args)
     admin_role = await _get_or_create_role(ROLE_ADMIN)
     personal_role = await _get_or_create_role(ROLE_USER)
     usuarios_module = await _get_or_create_module(
@@ -294,6 +311,7 @@ async def bootstrap(args: argparse.Namespace) -> None:
         TIPO_DOCUMENTO_DNI, longitud=TIPO_DOCUMENTO_DNI_LONGITUD
     )
     await _get_or_create_categoria(CATEGORIA_SIN_CATEGORIA)
+    existing_admin = await _get_existing_admin_user(rol=admin_role)
 
     # Usuarios: crear/inactivar cuentas queda reservado al administrador.
     for permission_name in PERMISSIONS_USUARIOS:
@@ -319,8 +337,13 @@ async def bootstrap(args: argparse.Namespace) -> None:
                     permiso=permission,
                 )
 
-    admin = await _ensure_admin_user(
-        rol=admin_role, tipo_documento=tipo_documento_dni, **admin_args
+    admin_args = _resolve_admin_args(args) if existing_admin is None else None
+    admin = (
+        await _ensure_admin_user(
+            rol=admin_role, tipo_documento=tipo_documento_dni, **admin_args
+        )
+        if admin_args is not None
+        else existing_admin
     )
     print(
         "Bootstrap de seguridad completado. "
