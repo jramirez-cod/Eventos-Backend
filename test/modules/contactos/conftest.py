@@ -1,9 +1,7 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.main import app
 from app.modules.categorias.models import Categoria, DetalleCategoria
 from app.modules.contactos.models import Contacto, ContactoHistorialEmpresa
-from app.modules.contactos.router import router as contactos_router
 from app.modules.empresas.models import Empresa
 from app.modules.grupos.models import Grupo
 from app.modules.maestros.models import Cargo
@@ -25,12 +23,6 @@ CONTACT_PERMISSIONS = (
     "FUSIONAR_CONTACTO",
     "EXPORTAR_CONTACTO",
 )
-
-if not any(
-    getattr(route, "path", None) == "/api/v1/contactos" for route in app.routes
-):
-    app.include_router(contactos_router, prefix="/api/v1")
-
 
 async def seed_contact_actor(
     session: AsyncSession,

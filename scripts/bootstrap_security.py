@@ -37,6 +37,18 @@ MODULO_CATEGORIAS = "CATEGORIAS"
 PERMISOS_CATEGORIAS = ("CREAR_CATEGORIA", "INACTIVAR_CATEGORIA")
 MODULO_EMPRESAS = "EMPRESAS"
 PERMISOS_EMPRESAS = ("CREAR_EMPRESA", "INACTIVAR_EMPRESA")
+MODULO_MAESTROS = "MAESTROS"
+PERMISOS_MAESTROS = ("CONSULTAR_MAESTROS", "GESTIONAR_MAESTROS")
+MODULO_CONTACTOS = "CONTACTOS"
+PERMISOS_CONTACTOS = (
+    "CREAR_CONTACTO",
+    "CONSULTAR_CONTACTO",
+    "ACTUALIZAR_CONTACTO",
+    "CAMBIAR_EMPRESA_CONTACTO",
+    "CAMBIAR_ESTADO_CONTACTO",
+    "FUSIONAR_CONTACTO",
+    "EXPORTAR_CONTACTO",
+)
 TIPO_DOCUMENTO_DNI = "DNI"
 TIPO_DOCUMENTO_DNI_LONGITUD = 8
 CATEGORIA_SIN_CATEGORIA = "Sin categoría"
@@ -49,6 +61,10 @@ REQUIRED_TABLES = {
     "tipo_documento",
     "categoria",
     "empresa",
+    "cargo",
+    "area",
+    "contacto",
+    "contacto_historial_empresa",
 }
 
 
@@ -307,6 +323,12 @@ async def bootstrap(args: argparse.Namespace) -> None:
     empresas_module = await _get_or_create_module(
         MODULO_EMPRESAS, descripcion="Gestión de empresas"
     )
+    maestros_module = await _get_or_create_module(
+        MODULO_MAESTROS, descripcion="Gestión de cargos y áreas"
+    )
+    contactos_module = await _get_or_create_module(
+        MODULO_CONTACTOS, descripcion="Gestión de contactos"
+    )
     tipo_documento_dni = await _get_or_create_tipo_documento(
         TIPO_DOCUMENTO_DNI, longitud=TIPO_DOCUMENTO_DNI_LONGITUD
     )
@@ -336,6 +358,37 @@ async def bootstrap(args: argparse.Namespace) -> None:
                     modulo=modulo,
                     permiso=permission,
                 )
+
+    # Maestros: ambos roles consultan catálogos; solo el administrador los gestiona.
+    for permission_name in PERMISOS_MAESTROS:
+        permission = await _get_or_create_permission(permission_name)
+        await _ensure_role_permission(
+            rol=admin_role,
+            modulo=maestros_module,
+            permiso=permission,
+        )
+        if permission_name == "CONSULTAR_MAESTROS":
+            await _ensure_role_permission(
+                rol=personal_role,
+                modulo=maestros_module,
+                permiso=permission,
+            )
+
+    # Contactos: ambos roles operan el directorio; la fusión queda reservada
+    # al administrador por su impacto sobre historial y futuras relaciones.
+    for permission_name in PERMISOS_CONTACTOS:
+        permission = await _get_or_create_permission(permission_name)
+        await _ensure_role_permission(
+            rol=admin_role,
+            modulo=contactos_module,
+            permiso=permission,
+        )
+        if permission_name != "FUSIONAR_CONTACTO":
+            await _ensure_role_permission(
+                rol=personal_role,
+                modulo=contactos_module,
+                permiso=permission,
+            )
 
     admin_args = _resolve_admin_args(args) if existing_admin is None else None
     admin = (

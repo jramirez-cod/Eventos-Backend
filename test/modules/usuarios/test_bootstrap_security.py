@@ -59,13 +59,13 @@ async def test_bootstrap_rbac_es_idempotente(
         assert await session.scalar(select(func.count()).select_from(Rol)) == 2
         assert await session.scalar(
             select(func.count()).select_from(Modulo)
-        ) == 4
+        ) == 6
         assert await session.scalar(
             select(func.count()).select_from(Permiso)
-        ) == 8
+        ) == 17
         assert await session.scalar(
             select(func.count()).select_from(RolPermisoModulo)
-        ) == 14
+        ) == 30
         assert await session.scalar(
             select(func.count()).select_from(Usuario)
         ) == 1
@@ -76,4 +76,18 @@ async def test_bootstrap_rbac_es_idempotente(
             .join(Rol, Rol.id_rol == RolPermisoModulo.id_rol)
             .where(Rol.nombre_rol == "PERSONAL_EVENTOS")
         )
-        assert personal_permissions == 6
+        assert personal_permissions == 13
+
+        personal_fusion_permission = await session.scalar(
+            select(func.count())
+            .select_from(RolPermisoModulo)
+            .join(Rol, Rol.id_rol == RolPermisoModulo.id_rol)
+            .join(Permiso, Permiso.id_permiso == RolPermisoModulo.id_permiso)
+            .join(Modulo, Modulo.id_modulo == RolPermisoModulo.id_modulo)
+            .where(
+                Rol.nombre_rol == "PERSONAL_EVENTOS",
+                Modulo.nombre_modulo == "CONTACTOS",
+                Permiso.codigo == "FUSIONAR_CONTACTO",
+            )
+        )
+        assert personal_fusion_permission == 0

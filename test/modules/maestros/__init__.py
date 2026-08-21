@@ -1,8 +1,6 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.main import app
 from app.modules.maestros.models import Area, Cargo
-from app.modules.maestros.router import router as maestros_router
 from app.modules.usuarios.models import Usuario
 from test.modules.usuarios.conftest import (
     auth_header,
@@ -13,13 +11,6 @@ from test.modules.usuarios.conftest import (
 
 
 MAESTRO_PERMISSIONS = ("CONSULTAR_MAESTROS", "GESTIONAR_MAESTROS")
-
-if not any(
-    getattr(route, "path", None) == "/api/v1/maestros/cargos"
-    for route in app.routes
-):
-    app.include_router(maestros_router, prefix="/api/v1")
-
 
 async def seed_maestro_actor(
     session: AsyncSession,
