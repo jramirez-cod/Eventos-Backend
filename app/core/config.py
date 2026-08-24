@@ -36,6 +36,10 @@ class Settings(BaseSettings):
     )
     cors_allow_localhost_any_port: bool = False
 
+    # Archivos de Eventos
+    event_flyer_upload_dir: str = "uploads/eventos"
+    event_flyer_max_bytes: int = Field(default=5_242_880, gt=0)
+
     # Seguridad
     secret_key: str = ""
     jwt_algorithm: str = "HS256"

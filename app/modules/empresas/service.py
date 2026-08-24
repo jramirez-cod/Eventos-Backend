@@ -3,9 +3,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.modules.auditoria.repository import AuditoriaRepository
 from app.modules.categorias.models import Categoria
 from app.modules.categorias.repository import CategoriaRepository
+from app.modules.contactos.dto import ContactoCreate, ContactoResponse
+from app.modules.contactos.service import ContactoService
 from app.modules.empresas.dto import (
     CambiarClasificacionDTO,
     EmpresaCreateDTO,
+    EmpresaRegistroCompletoDTO,
     EmpresaUpdateDTO,
 )
 from app.modules.empresas.models import Empresa, EmpresaHistorialClasificacion
@@ -54,7 +57,7 @@ class EmpresaService:
         return await self.ruc_consultor.consultar(ruc)
 
     async def crear_empresa(
-        self, *, data: EmpresaCreateDTO, actor: Usuario
+        self, *, data: EmpresaCreateDTO, actor: Usuario, commit: bool = True
     ) -> tuple[Empresa, Grupo, Categoria]:
         if await self.empresas.get_by_ruc(data.ruc):
             raise DuplicateRucError("El RUC ya está registrado.")
@@ -89,14 +92,50 @@ class EmpresaService:
                     "estado": empresa.estado,
                 },
             )
-            await self.db.commit()
-            await self.db.refresh(empresa)
+            if commit:
+                await self.db.commit()
+                await self.db.refresh(empresa)
+            else:
+                await self.db.flush()
         except Exception:
             await self.db.rollback()
             raise
 
         _, grupo, categoria = detalle_completo
         return empresa, grupo, categoria
+
+    async def crear_empresa_con_contactos(
+        self, *, data: EmpresaRegistroCompletoDTO, actor: Usuario
+    ) -> tuple[tuple[Empresa, Grupo, Categoria], list[ContactoResponse]]:
+        contactos_service = ContactoService(self.db)
+        contactos: list[ContactoResponse] = []
+
+        try:
+            empresa_detallada = await self.crear_empresa(
+                data=data.empresa,
+                actor=actor,
+                commit=False,
+            )
+            empresa = empresa_detallada[0]
+
+            for contacto_data in data.contactos:
+                contacto = await contactos_service.crear_contacto(
+                    data=ContactoCreate(
+                        id_empresa=empresa.id_empresa,
+                        **contacto_data.model_dump(),
+                    ),
+                    actor=actor,
+                    commit=False,
+                )
+                contactos.append(contacto)
+
+            await self.db.commit()
+            await self.db.refresh(empresa)
+        except Exception:
+            await self.db.rollback()
+            raise
+
+        return empresa_detallada, contactos
 
     async def obtener_empresa(
         self, id_empresa: int

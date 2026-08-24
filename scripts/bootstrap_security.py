@@ -49,6 +49,22 @@ PERMISOS_CONTACTOS = (
     "FUSIONAR_CONTACTO",
     "EXPORTAR_CONTACTO",
 )
+MODULO_EVENTOS = "EVENTOS"
+PERMISOS_EVENTOS = (
+    "CONSULTAR_EVENTO",
+    "CREAR_EVENTO",
+    "ACTUALIZAR_EVENTO",
+    "CAMBIAR_ESTADO_EVENTO",
+    "REABRIR_EVENTO",
+    "ELIMINAR_EVENTO",
+    "EXPORTAR_EVENTO",
+)
+MODULO_PARTICIPANTES = "PARTICIPANTES"
+PERMISOS_PARTICIPANTES = (
+    "CONSULTAR_PARTICIPANTE",
+    "CREAR_PARTICIPANTE",
+    "AFILIAR_EMPRESA_EVENTO",
+)
 TIPO_DOCUMENTO_DNI = "DNI"
 TIPO_DOCUMENTO_DNI_LONGITUD = 8
 CATEGORIA_SIN_CATEGORIA = "Sin categoría"
@@ -65,6 +81,12 @@ REQUIRED_TABLES = {
     "area",
     "contacto",
     "contacto_historial_empresa",
+    "evento",
+    "programacion_evento",
+    "detalle_programacion_evento",
+    "lugar",
+    "evento_empresa",
+    "participante",
 }
 
 
@@ -329,6 +351,12 @@ async def bootstrap(args: argparse.Namespace) -> None:
     contactos_module = await _get_or_create_module(
         MODULO_CONTACTOS, descripcion="Gestión de contactos"
     )
+    eventos_module = await _get_or_create_module(
+        MODULO_EVENTOS, descripcion="Gestión de eventos"
+    )
+    participantes_module = await _get_or_create_module(
+        MODULO_PARTICIPANTES, descripcion="Gestión de participantes"
+    )
     tipo_documento_dni = await _get_or_create_tipo_documento(
         TIPO_DOCUMENTO_DNI, longitud=TIPO_DOCUMENTO_DNI_LONGITUD
     )
@@ -387,6 +415,32 @@ async def bootstrap(args: argparse.Namespace) -> None:
             await _ensure_role_permission(
                 rol=personal_role,
                 modulo=contactos_module,
+                permiso=permission,
+            )
+
+    # Eventos: ambos roles operan el ciclo ordinario. Reabrir y eliminar son
+    # capacidades administrativas por su impacto sobre estado e historial.
+    for permission_name in PERMISOS_EVENTOS:
+        permission = await _get_or_create_permission(permission_name)
+        await _ensure_role_permission(
+            rol=admin_role,
+            modulo=eventos_module,
+            permiso=permission,
+        )
+        if permission_name not in {"REABRIR_EVENTO", "ELIMINAR_EVENTO"}:
+                await _ensure_role_permission(
+                    rol=personal_role,
+                    modulo=eventos_module,
+                    permiso=permission,
+                )
+
+    # Participantes: administrador y personal gestionan afiliaciones e invitados.
+    for permission_name in PERMISOS_PARTICIPANTES:
+        permission = await _get_or_create_permission(permission_name)
+        for rol in (admin_role, personal_role):
+            await _ensure_role_permission(
+                rol=rol,
+                modulo=participantes_module,
                 permiso=permission,
             )
 

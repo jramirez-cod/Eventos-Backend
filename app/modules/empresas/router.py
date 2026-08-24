@@ -4,11 +4,26 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
+from app.modules.contactos.service import (
+    CargoInactiveError,
+    CargoNotFoundError,
+    ContactoPersistenceConflictError,
+    ContactoServiceError,
+    DuplicateDocumentError,
+    EmpresaInactiveError as ContactoEmpresaInactiveError,
+    EmpresaNotFoundError as ContactoEmpresaNotFoundError,
+    InvalidDocumentPairError,
+    InvalidPhoneError,
+    TipoDocumentoInactiveError,
+    TipoDocumentoNotFoundError,
+)
 from app.modules.empresas.dto import (
     CambiarClasificacionDTO,
     ConsultaRucResponseDTO,
     EmpresaCreateDTO,
     EmpresaHistorialResponseDTO,
+    EmpresaRegistroCompletoDTO,
+    EmpresaRegistroCompletoResponseDTO,
     EmpresaResponseDTO,
     EmpresaUpdateDTO,
     InactivarEmpresaDTO,
@@ -29,6 +44,8 @@ from app.modules.usuarios.models import Usuario
 MODULO_EMPRESAS = "EMPRESAS"
 PERMISO_CREAR_EMPRESA = "CREAR_EMPRESA"
 PERMISO_INACTIVAR_EMPRESA = "INACTIVAR_EMPRESA"
+MODULO_CONTACTOS = "CONTACTOS"
+PERMISO_CREAR_CONTACTO = "CREAR_CONTACTO"
 
 router = APIRouter(prefix="/empresas", tags=["Empresas"])
 
@@ -46,6 +63,32 @@ def _to_response(empresa, grupo, categoria) -> EmpresaResponseDTO:
         id_categoria=categoria.id_categoria,
         nombre_categoria=categoria.nombre_categoria,
     )
+
+
+def _raise_contacto_http_error(exc: ContactoServiceError) -> None:
+    if isinstance(
+        exc,
+        (
+            ContactoEmpresaNotFoundError,
+            CargoNotFoundError,
+            TipoDocumentoNotFoundError,
+        ),
+    ):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    if isinstance(
+        exc,
+        (
+            ContactoEmpresaInactiveError,
+            CargoInactiveError,
+            TipoDocumentoInactiveError,
+            InvalidDocumentPairError,
+            InvalidPhoneError,
+        ),
+    ):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    if isinstance(exc, (DuplicateDocumentError, ContactoPersistenceConflictError)):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+    raise exc
 
 
 @router.get("", response_model=list[EmpresaResponseDTO])
@@ -145,6 +188,45 @@ async def crear_empresa(
         )
 
     return _to_response(empresa, grupo, categoria)
+
+
+@router.post(
+    "/registro-completo",
+    response_model=EmpresaRegistroCompletoResponseDTO,
+    status_code=status.HTTP_201_CREATED,
+)
+async def crear_empresa_con_contactos(
+    data: EmpresaRegistroCompletoDTO,
+    actor: Usuario = Depends(
+        require_permission(MODULO_EMPRESAS, PERMISO_CREAR_EMPRESA)
+    ),
+    _contactos_actor: Usuario = Depends(
+        require_permission(MODULO_CONTACTOS, PERMISO_CREAR_CONTACTO)
+    ),
+    db: AsyncSession = Depends(get_db),
+) -> EmpresaRegistroCompletoResponseDTO:
+    try:
+        empresa_detallada, contactos = (
+            await EmpresaService(db).crear_empresa_con_contactos(
+                data=data,
+                actor=actor,
+            )
+        )
+    except DuplicateRucError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="El RUC ya está registrado.",
+        )
+    except DetalleCategoriaInvalidoError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    except ContactoServiceError as exc:
+        _raise_contacto_http_error(exc)
+        raise
+
+    return EmpresaRegistroCompletoResponseDTO(
+        empresa=_to_response(*empresa_detallada),
+        contactos=contactos,
+    )
 
 
 @router.put("/{id_empresa}", response_model=EmpresaResponseDTO)

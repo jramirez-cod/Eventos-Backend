@@ -13,8 +13,7 @@ from pydantic import (
 Genero = Literal["M", "F", "OTRO"]
 
 
-class ContactoCreate(BaseModel):
-    id_empresa: int = Field(gt=0)
+class ContactoCreateData(BaseModel):
     id_cargo: int | None = Field(default=None, gt=0)
     id_tipo_documento: int | None = Field(default=None, gt=0)
     numero_documento: str | None = Field(default=None, min_length=1, max_length=30)
@@ -42,6 +41,10 @@ class ContactoCreate(BaseModel):
                 "id_tipo_documento y numero_documento deben enviarse juntos."
             )
         return self
+
+
+class ContactoCreate(ContactoCreateData):
+    id_empresa: int = Field(gt=0)
 
 
 class ContactoUpdate(BaseModel):

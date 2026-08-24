@@ -107,7 +107,11 @@ class ContactoService:
         self.auditoria = AuditoriaRepository(db)
 
     async def crear_contacto(
-        self, *, data: ContactoCreate, actor: Usuario
+        self,
+        *,
+        data: ContactoCreate,
+        actor: Usuario,
+        commit: bool = True,
     ) -> ContactoResponse:
         await self._validar_empresa_activa(data.id_empresa)
         await self._validar_cargo_activo(data.id_cargo)
@@ -142,7 +146,10 @@ class ContactoService:
                 accion="CREAR_CONTACTO",
                 valor_nuevo=self._audit_values(contacto),
             )
-            await self.db.commit()
+            if commit:
+                await self.db.commit()
+            else:
+                await self.db.flush()
         except IntegrityError as exc:
             await self.db.rollback()
             if data.numero_documento is not None:

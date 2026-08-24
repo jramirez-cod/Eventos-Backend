@@ -59,13 +59,13 @@ async def test_bootstrap_rbac_es_idempotente(
         assert await session.scalar(select(func.count()).select_from(Rol)) == 2
         assert await session.scalar(
             select(func.count()).select_from(Modulo)
-        ) == 6
+        ) == 8
         assert await session.scalar(
             select(func.count()).select_from(Permiso)
-        ) == 17
+        ) == 27
         assert await session.scalar(
             select(func.count()).select_from(RolPermisoModulo)
-        ) == 30
+        ) == 48
         assert await session.scalar(
             select(func.count()).select_from(Usuario)
         ) == 1
@@ -76,7 +76,7 @@ async def test_bootstrap_rbac_es_idempotente(
             .join(Rol, Rol.id_rol == RolPermisoModulo.id_rol)
             .where(Rol.nombre_rol == "PERSONAL_EVENTOS")
         )
-        assert personal_permissions == 13
+        assert personal_permissions == 21
 
         personal_fusion_permission = await session.scalar(
             select(func.count())
@@ -91,3 +91,29 @@ async def test_bootstrap_rbac_es_idempotente(
             )
         )
         assert personal_fusion_permission == 0
+
+        personal_admin_event_permissions = await session.scalar(
+            select(func.count())
+            .select_from(RolPermisoModulo)
+            .join(Rol, Rol.id_rol == RolPermisoModulo.id_rol)
+            .join(Permiso, Permiso.id_permiso == RolPermisoModulo.id_permiso)
+            .join(Modulo, Modulo.id_modulo == RolPermisoModulo.id_modulo)
+            .where(
+                Rol.nombre_rol == "PERSONAL_EVENTOS",
+                Modulo.nombre_modulo == "EVENTOS",
+                Permiso.codigo.in_({"REABRIR_EVENTO", "ELIMINAR_EVENTO"}),
+            )
+        )
+        assert personal_admin_event_permissions == 0
+
+        personal_participante_permissions = await session.scalar(
+            select(func.count())
+            .select_from(RolPermisoModulo)
+            .join(Rol, Rol.id_rol == RolPermisoModulo.id_rol)
+            .join(Modulo, Modulo.id_modulo == RolPermisoModulo.id_modulo)
+            .where(
+                Rol.nombre_rol == "PERSONAL_EVENTOS",
+                Modulo.nombre_modulo == "PARTICIPANTES",
+            )
+        )
+        assert personal_participante_permissions == 3

@@ -674,6 +674,7 @@ PATCH  /api/v1/categorias/{id_categoria}/reactivar
 GET    /api/v1/empresas
 GET    /api/v1/empresas/{id_empresa}
 POST   /api/v1/empresas
+POST   /api/v1/empresas/registro-completo
 PUT    /api/v1/empresas/{id_empresa}
 GET    /api/v1/empresas/consultar-ruc/{ruc}
 PATCH  /api/v1/empresas/{id_empresa}/inactivar
@@ -685,6 +686,38 @@ GET    /api/v1/empresas/{id_empresa}/historial
 El bootstrap actual registra los módulos y permisos de Grupos, Categorías y
 Empresas. Todos estos endpoints requieren un JWT `access` y el permiso RBAC
 correspondiente.
+
+`POST /api/v1/empresas/registro-completo` registra una empresa con cero o más
+contactos en una sola transacción. El endpoint requiere `CREAR_EMPRESA` y
+`CREAR_CONTACTO`. La empresa se crea primero dentro de la transacción y el
+backend asigna su `id_empresa` a cada contacto; el cliente no debe enviarlo.
+Si cualquier contacto falla, se revierten también los contactos anteriores,
+el historial, la auditoría y la empresa.
+
+```json
+{
+  "empresa": {
+    "nombre_empresa": "Agrolight Perú",
+    "ruc": "20552103816",
+    "id_detalle_categoria": 8,
+    "razon_social": "AGROLIGHT PERU S.A.C.",
+    "nombre_comercial": "Agrolight"
+  },
+  "contactos": [
+    {
+      "id_cargo": 3,
+      "id_tipo_documento": 1,
+      "numero_documento": "76543210",
+      "nombres": "Ana",
+      "apellidos": "Torres",
+      "genero": "F",
+      "celular": "987654321",
+      "correo": "ana@agrolight.pe",
+      "es_contacto_principal": true
+    }
+  ]
+}
+```
 
 Los endpoints de actualización reciben únicamente campos generales.
 
@@ -852,6 +885,14 @@ app/modules/maestros/router.py
 
 ### Modelos de Maestros
 
+`Cargo` es el catálogo utilizado para asignar una función laboral a un
+Contacto. Las pantallas de alta o edición deben consultar solamente cargos
+activos; inactivar uno no modifica los contactos que ya lo tienen asociado.
+
+`Area` representa la unidad responsable dentro de CODIP, por ejemplo Comercial,
+Comunidad o Relaciones Institucionales. El esquema la contempla como referencia
+de Eventos, de modo que sus registros también deben conservarse históricamente.
+
 `Cargo` contiene:
 
 ```text
@@ -1014,6 +1055,9 @@ PATCH /api/v1/maestros/areas/2/estado
 }
 ```
 
+No se expone `DELETE` para Cargos ni Áreas. Ambos son catálogos históricos con
+relaciones presentes o futuras; se administran mediante `estado=false/true`.
+
 ### Reglas de Maestros
 
 ```text
@@ -1067,23 +1111,24 @@ GESTIONAR_MAESTROS
 ```
 
 Los `GET` usan `CONSULTAR_MAESTROS`; altas, actualizaciones y cambios de estado
-usan `GESTIONAR_MAESTROS`. El módulo y sus relaciones de rol todavía deben
-agregarse de forma idempotente a `scripts/bootstrap_security.py`.
+usan `GESTIONAR_MAESTROS`. El router está registrado en `app/api/router.py` y el
+bootstrap crea el módulo y permisos de forma idempotente.
 
-Para habilitar las rutas en FastAPI debe agregarse manualmente en
-`app/api/router.py`:
+Distribución actual:
 
-```python
-from app.modules.maestros.router import router as maestros_router
+```text
+Administrador de Eventos: CONSULTAR_MAESTROS + GESTIONAR_MAESTROS
+Personal de Eventos:       CONSULTAR_MAESTROS
 ```
 
-y junto a los demás routers:
+Después de actualizar el backend debe ejecutarse una vez:
 
-```python
-api_router.include_router(maestros_router)
+```bash
+.venv/bin/python scripts/bootstrap_security.py
 ```
 
-Después de reiniciar FastAPI, Swagger mostrará la sección **Maestros**.
+Puede ejecutarse nuevamente sin duplicar módulos, permisos ni relaciones. Tras
+reiniciar FastAPI, Swagger muestra la sección **Maestros**.
 
 ### Errores esperados de Maestros
 
@@ -1214,28 +1259,19 @@ FUSIONAR_CONTACTO
 EXPORTAR_CONTACTO
 ```
 
-Estos permisos todavía deben agregarse de forma idempotente a
-`scripts/bootstrap_security.py` y asignarse a los roles internos que
-correspondan.
+Estos permisos se crean de forma idempotente mediante
+`scripts/bootstrap_security.py`. `ADMINISTRADOR_EVENTOS` recibe los siete;
+`PERSONAL_EVENTOS` recibe todos excepto `FUSIONAR_CONTACTO`.
 
-### Registrar el router de Contactos
+### Habilitación de Contactos
 
-Por decisión de alcance, `app/api/router.py` no fue modificado durante la
-implementación del módulo. Para que Contactos aparezca en FastAPI y Swagger hay
-que agregar:
+El router está registrado en `app/api/router.py` y aparece automáticamente en
+Swagger bajo la sección **Contactos**. El bootstrap debe ejecutarse al menos una
+vez en cada base para crear el módulo, los permisos y sus asignaciones RBAC:
 
-```python
-from app.modules.contactos.router import router as contactos_router
+```bash
+.venv/bin/python scripts/bootstrap_security.py
 ```
-
-y después de los otros `include_router`:
-
-```python
-api_router.include_router(contactos_router)
-```
-
-Después se debe reiniciar FastAPI y comprobar en `/docs` la sección
-**Contactos**.
 
 ### Probar Contactos desde Swagger
 
@@ -1501,6 +1537,305 @@ verifica que FastAPI esté conectado a la misma base creada con `SistemaEventosC
 422 error de validación del JSON
 ```
 
+## Módulo Eventos
+
+Implementa `HU-EVE-001` a `HU-EVE-007` con la arquitectura
+Router → Service → Repository → SQLAlchemy → PostgreSQL.
+
+### Modelos y estados
+
+```text
+Evento 1:1 ProgramacionEvento 1:N DetalleProgramacionEvento
+ProgramacionEvento N:1 Lugar (opcional)
+```
+
+El evento usa los estados `ABIERTO`, `FINALIZADO` e `INACTIVO`. La modalidad
+es obligatoria y admite `PRESENCIAL`, `VIRTUAL` o `HIBRIDO`. Lugar y enlace son
+opcionales. El rango genera automáticamente un registro por día y PostgreSQL
+impide duplicar una fecha dentro de la misma programación.
+
+### Endpoints de Eventos
+
+```text
+POST   /api/v1/eventos
+GET    /api/v1/eventos
+GET    /api/v1/eventos/exportar
+GET    /api/v1/eventos/{id_evento}
+PUT    /api/v1/eventos/{id_evento}
+DELETE /api/v1/eventos/{id_evento}
+GET    /api/v1/eventos/{id_evento}/programacion
+PUT    /api/v1/eventos/{id_evento}/programacion
+GET    /api/v1/eventos/{id_evento}/dias
+PATCH  /api/v1/eventos/{id_evento}/dias/{id_dia}
+PUT    /api/v1/eventos/{id_evento}/flyer
+PATCH  /api/v1/eventos/{id_evento}/finalizar
+PATCH  /api/v1/eventos/{id_evento}/reabrir
+PATCH  /api/v1/eventos/{id_evento}/inactivar
+```
+
+Ejemplo satisfactorio para `POST /api/v1/eventos`:
+
+```json
+{
+  "nombre_evento": "Nexo Summit 2026",
+  "descripcion": "Encuentro empresarial CODIP",
+  "fecha_inicio": "2026-10-10",
+  "fecha_fin": "2026-10-12",
+  "aforo": 250,
+  "modalidad": "HIBRIDO",
+  "enlace_general": "https://meet.example/nexo",
+  "lugar": {
+    "pais": "Perú",
+    "provincia": "Lima",
+    "distrito": "Miraflores",
+    "direccion": "Av. Principal 123"
+  },
+  "hora_inicio": "09:00:00",
+  "hora_fin": "18:00:00"
+}
+```
+
+La creación deja el evento `ABIERTO`, crea una única programación y genera los
+días 10, 11 y 12 dentro de la misma transacción. Un nombre repetido se permite.
+
+El listado acepta `search`, `fecha_desde`, `fecha_hasta`, `estado`, `modalidad`,
+`page` y `page_size`. Las fechas se filtran por solapamiento. La exportación
+acepta los mismos filtros y descarga `eventos.xlsx`.
+
+El flyer se envía como `multipart/form-data`, campo `flyer`, y admite JPG, JPEG
+o PNG. Configuración:
+
+```text
+EVENT_FLYER_UPLOAD_DIR=uploads/eventos
+EVENT_FLYER_MAX_BYTES=5242880
+```
+
+### Permisos de Eventos
+
+```text
+CONSULTAR_EVENTO
+CREAR_EVENTO
+ACTUALIZAR_EVENTO
+CAMBIAR_ESTADO_EVENTO
+REABRIR_EVENTO
+ELIMINAR_EVENTO
+EXPORTAR_EVENTO
+```
+
+Administrador recibe todos. Personal recibe consulta, creación, actualización,
+cambio de estado y exportación; no puede reabrir ni eliminar.
+
+### Compatibilidad del esquema
+
+La base de desarrollo verificada no tenía tablas de Eventos y `create_db.py`
+creó el modelo nuevo correctamente. `SistemaEventosCODIP_postgresql.sql`
+conserva una definición antigua e incompatible (estado booleano, política/área
+obligatorias y detalle sin horarios). No debe usarse para reemplazar estas
+tablas sin una migración revisada por el equipo.
+
+La eliminación física funciona cuando no hay participantes. El repository
+comprueba primero la tabla actual `participante` y conserva compatibilidad de
+lectura con una eventual tabla legada `evento_contacto`; si encuentra
+dependencias bloquea con `409`.
+El periodo autorizado de corrección sigue pendiente porque las HU no definen
+una duración.
+
+## Módulo Participantes
+
+Se implementaron:
+
+```text
+HU-PAR-001 Añadir invitados manualmente
+HU-PAR-002 Crear contacto desde el evento
+HU-PAR-003 Registrar empresa sin contacto
+HU-PAR-004 Evitar participante duplicado
+```
+
+El dominio separa la afiliación empresarial de la persona invitada:
+
+```text
+Evento -> EventoEmpresa -> Participante -> Contacto
+```
+
+`EventoEmpresa` puede existir sin participantes. `Participante` no duplica
+nombres, documento ni datos de contacto; referencia al `Contacto` real.
+
+### Modelos y constraints
+
+```text
+EventoEmpresa
+- id_evento_empresa
+- id_evento
+- id_empresa
+- estado
+- creado_en
+- creado_por
+
+Participante
+- id_participante
+- id_evento_empresa
+- id_evento
+- id_contacto
+- confirmacion: SIN_RESPUESTA | SI | NO
+- estado
+- creado_en
+- creado_por
+```
+
+PostgreSQL protege estas reglas incluso ante requests concurrentes:
+
+```text
+UNIQUE(evento_empresa.id_evento, evento_empresa.id_empresa)
+UNIQUE(participante.id_evento, participante.id_contacto)
+FK compuesta participante(id_evento_empresa, id_evento)
+  -> evento_empresa(id_evento_empresa, id_evento)
+```
+
+La FK compuesta evita asociar accidentalmente un participante a una afiliación
+que pertenece a otro evento.
+
+### Endpoints de Participantes
+
+| Método | Ruta | Uso |
+| --- | --- | --- |
+| `POST` | `/api/v1/participantes/eventos/{id_evento}/empresas` | Afiliar empresa activa |
+| `GET` | `/api/v1/participantes/eventos/{id_evento}/empresas` | Listar empresas afiliadas |
+| `POST` | `/api/v1/participantes/eventos/{id_evento}` | Añadir uno o varios contactos |
+| `POST` | `/api/v1/participantes/eventos/{id_evento}/crear-contacto` | Crear contacto e inscribirlo |
+| `GET` | `/api/v1/participantes` | Listar y filtrar participantes |
+| `GET` | `/api/v1/participantes/{id_participante}` | Consultar detalle |
+
+No se implementan todavía confirmación pública, QR, asistencia, cupos,
+desafiliación ni eliminación de participantes.
+
+### Probar Participantes en Swagger
+
+1. Iniciar sesión desde `POST /api/v1/auth/login` y autorizar Swagger.
+2. Crear o elegir un Evento `ABIERTO`.
+3. Afiliar una empresa activa:
+
+```json
+{
+  "id_empresa": 25
+}
+```
+
+La respuesta incluye `id_evento_empresa`; ese identificador se utiliza en los
+siguientes requests. La empresa queda afiliada aunque aún tenga cero invitados.
+
+4. Añadir contactos activos de esa misma empresa:
+
+```json
+{
+  "id_evento_empresa": 8,
+  "ids_contacto": [15]
+}
+```
+
+Respuesta conceptual:
+
+```json
+{
+  "created": 1,
+  "participantes": [
+    {
+      "id_participante": 100,
+      "id_evento_empresa": 8,
+      "id_evento": 5,
+      "nombre_evento": "Nexo Summit",
+      "id_empresa": 25,
+      "nombre_empresa": "Empresa X",
+      "id_contacto": 15,
+      "nombre_completo": "Perez Ramos Juan",
+      "numero_documento": "76543210",
+      "correo": "juan@empresa.com",
+      "celular": "987654321",
+      "confirmacion": "SIN_RESPUESTA",
+      "estado": true,
+      "creado_en": "2026-08-23T10:00:00-05:00",
+      "creado_por": 1
+    }
+  ]
+}
+```
+
+5. Para crear el contacto desde el propio evento:
+
+```json
+{
+  "id_evento_empresa": 8,
+  "contacto": {
+    "id_empresa": 25,
+    "id_cargo": 3,
+    "id_tipo_documento": 1,
+    "numero_documento": "76543210",
+    "nombres": "Juan",
+    "apellidos": "Perez Ramos",
+    "genero": "M",
+    "celular": "987 654 321",
+    "correo": "juan@empresa.com",
+    "es_contacto_principal": false
+  }
+}
+```
+
+Esta operación reutiliza `ContactoService`: valida empresa, cargo, tipo de
+documento, documento único y celular; crea también la primera vigencia en
+`contacto_historial_empresa`. Contacto, historial, participante y auditorías se
+confirman en una sola transacción. Si falla la inscripción, todo hace rollback.
+
+6. Consultar con filtros:
+
+```http
+GET /api/v1/participantes?id_evento=5&id_empresa=25&confirmacion=SIN_RESPUESTA&search=Perez&page=1&page_size=20
+```
+
+### Reglas, permisos y errores
+
+Todas las altas requieren Evento `ABIERTO`, empresa activa y afiliación
+explícita. Los contactos deben existir, estar activos y pertenecer actualmente
+a la empresa afiliada. Un lote es atómico: si un contacto falla, no se crea
+ninguno del lote.
+
+```text
+CONSULTAR_PARTICIPANTE
+CREAR_PARTICIPANTE
+AFILIAR_EMPRESA_EVENTO
+```
+
+El bootstrap asigna los tres permisos a `ADMINISTRADOR_EVENTOS` y
+`PERSONAL_EVENTOS`.
+
+```text
+401 token ausente, inválido o usuario inactivo
+403 usuario autenticado sin permiso
+404 evento, empresa, afiliación, contacto o participante inexistente
+409 evento no abierto, entidad inactiva, empresa incorrecta o duplicidad
+422 request estructuralmente inválido
+```
+
+Auditorías generadas:
+
+```text
+AFILIAR_EMPRESA_EVENTO
+AGREGAR_PARTICIPANTE_EVENTO
+CREAR_CONTACTO_DESDE_EVENTO
+```
+
+### Compatibilidad con el SQL canónico
+
+`SistemaEventosCODIP_postgresql.sql` conserva un diseño anterior e
+incompatible: `EVENTO_EMPRESA` referencia `idProgramacionEvento` y
+`EVENTO_CONTACTO` mezcla confirmación con asistencia, hora de ingreso y
+credencial. La base configurada no contenía esas tablas al implementar estas
+HU. Se crearon `evento_empresa` y `participante` con el modelo normalizado
+descrito arriba, referenciado directamente a `evento`.
+
+No debe ejecutarse la definición legada de esas tablas encima del esquema
+actual. Si el SQL canónico continuará como instalador oficial, el equipo debe
+actualizarlo mediante una migración revisada; la asistencia y QR siguen fuera
+de Participantes.
+
 ## Tests implementados
 
 Los tests están organizados por historia de usuario:
@@ -1518,6 +1853,8 @@ test/modules/empresas/
 test/modules/contactos/
 test/modules/maestros/test_cargos.py
 test/modules/maestros/test_areas.py
+test/modules/eventos/
+test/modules/participantes/
 ```
 
 Fixture principal:
@@ -1613,6 +1950,8 @@ JWT anterior deja de funcionar después de la inactivación
 .venv/bin/python -m pytest test/modules/empresas -q
 .venv/bin/python -m pytest test/modules/contactos -q
 .venv/bin/python -m pytest test/modules/maestros -v
+.venv/bin/python -m pytest test/modules/eventos -q
+.venv/bin/python -m pytest test/modules/participantes -q
 .venv/bin/python -m pytest -q
 ```
 
@@ -1625,7 +1964,9 @@ Estado de la colección actual:
 20 tests de Maestros
 20 tests de Factiliza
 3 tests del verificador de dependencias de borrado
-172 tests totales aprobados
+44 tests de Eventos
+22 tests de Participantes
+238 tests totales aprobados
 ```
 
 Los tests de Maestros cubren:
@@ -1651,13 +1992,37 @@ reactivación e idempotencia de estado
 Resultado real de la ejecución del módulo:
 
 ```text
-20 passed in 19.48s
+20 passed
 ```
 
 Resultado real de la regresión completa:
 
 ```text
-172 passed in 113.51s
+238 passed in 192.91s
+```
+
+Los tests de Participantes cubren:
+
+```text
+empresa afiliada al evento sin contactos
+duplicidad de afiliación
+evento finalizado o inactivo
+empresa y contacto inactivos
+contacto perteneciente a otra empresa
+alta de uno y varios participantes
+confirmación inicial SIN_RESPUESTA
+atomicidad de altas múltiples
+creación de Contacto e historial desde Evento
+rollback forzado sin datos parciales
+auditoría y permisos RBAC
+listado, búsqueda, filtros, paginación y consulta por ID
+constraint PostgreSQL UNIQUE(id_evento, id_contacto)
+```
+
+Resultado real del módulo Participantes:
+
+```text
+22 passed in 23.81s
 ```
 
 Los tests de Contactos cubren:
@@ -1677,6 +2042,12 @@ búsqueda y filtros
 paginación y exportación CSV
 registro de metadata en create_db.py
 401 sin autenticación y 403 sin permiso
+```
+
+Resultado real del módulo Contactos:
+
+```text
+33 passed
 ```
 
 La colección puede verificarse sin conectarse a PostgreSQL:

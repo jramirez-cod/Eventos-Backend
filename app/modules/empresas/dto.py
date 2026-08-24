@@ -2,6 +2,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.modules.contactos.dto import ContactoCreateData, ContactoResponse
+
 
 class EmpresaDependienteDTO(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -17,6 +19,17 @@ class EmpresaCreateDTO(BaseModel):
     id_detalle_categoria: int = Field(gt=0)
     razon_social: str | None = Field(default=None, max_length=250)
     nombre_comercial: str | None = Field(default=None, max_length=180)
+
+
+class ContactoEmpresaCreateDTO(ContactoCreateData):
+    model_config = ConfigDict(extra="forbid")
+
+
+class EmpresaRegistroCompletoDTO(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    empresa: EmpresaCreateDTO
+    contactos: list[ContactoEmpresaCreateDTO] = Field(default_factory=list)
 
 
 class EmpresaUpdateDTO(BaseModel):
@@ -38,6 +51,11 @@ class EmpresaResponseDTO(BaseModel):
     nombre_grupo: str
     id_categoria: int
     nombre_categoria: str
+
+
+class EmpresaRegistroCompletoResponseDTO(BaseModel):
+    empresa: EmpresaResponseDTO
+    contactos: list[ContactoResponse]
 
 
 class ConsultaRucResponseDTO(BaseModel):
