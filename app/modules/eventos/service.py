@@ -1,4 +1,4 @@
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from io import BytesIO
 import math
 import os
@@ -19,6 +19,7 @@ from app.modules.auditoria.repository import AuditoriaRepository
 from app.modules.eventos.dto import (
     DetalleProgramacionResponse,
     DetalleProgramacionUpdate,
+    DetallePoliticaEventoResponse,
     EventoCreate,
     EventoListItem,
     EventoListResponse,
@@ -26,8 +27,18 @@ from app.modules.eventos.dto import (
     EventoUpdate,
     LugarCreate,
     LugarResponse,
+    PoliticaEventoCreate,
+    PoliticaEventoResponse,
+    PoliticaEventoUpdate,
+    ProgramacionDiaCreate,
+    ProgramacionEventoCreate,
+    ProgramacionEventoListResponse,
     ProgramacionEventoResponse,
+    ProgramacionEventoTransversalListResponse,
+    ProgramacionEventoTransversalResponse,
     ProgramacionEventoUpdate,
+    ResponsableEventoCreate,
+    ResponsableEventoResponse,
 )
 from app.modules.eventos.models import (
     DetalleProgramacionEvento,
@@ -35,6 +46,7 @@ from app.modules.eventos.models import (
     EventoEstado,
     EventoModalidad,
     Lugar,
+    PoliticaEvento,
     ProgramacionEvento,
 )
 from app.modules.eventos.repository import EventoDetalle, EventoRepository
@@ -59,11 +71,35 @@ class EventoNotFoundError(EventoServiceError):
     pass
 
 
+class AreaNotFoundError(EventoServiceError):
+    pass
+
+
+class BeneficioNotFoundError(EventoServiceError):
+    pass
+
+
+class CategoriaNotFoundError(EventoServiceError):
+    pass
+
+
 class ProgramacionNotFoundError(EventoServiceError):
     pass
 
 
 class DiaNotFoundError(EventoServiceError):
+    pass
+
+
+class UltimoDiaNoEliminableError(EventoServiceError):
+    pass
+
+
+class ResponsableNotFoundError(EventoServiceError):
+    pass
+
+
+class ResponsableDuplicadoError(EventoServiceError):
     pass
 
 
@@ -75,11 +111,23 @@ class InvalidScheduleError(EventoServiceError):
     pass
 
 
+class LugarRequeridoError(EventoServiceError):
+    pass
+
+
+class LugarNoPermitidoError(EventoServiceError):
+    pass
+
+
 class InvalidStateTransitionError(EventoServiceError):
     pass
 
 
 class EventoNotEditableError(EventoServiceError):
+    pass
+
+
+class ProgramacionNotEditableError(EventoServiceError):
     pass
 
 
@@ -103,13 +151,6 @@ class FlyerNotFoundError(EventoServiceError):
     pass
 
 
-def generar_dias_evento(fecha_inicio: date, fecha_fin: date) -> list[date]:
-    return [
-        fecha_inicio + timedelta(days=offset)
-        for offset in range((fecha_fin - fecha_inicio).days + 1)
-    ]
-
-
 class EventoService:
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
@@ -117,39 +158,36 @@ class EventoService:
         self.usuarios = UsuarioRepository(db)
         self.auditoria = AuditoriaRepository(db)
 
+    # -- Evento -------------------------------------------------------
+
     async def crear_evento(
         self, *, data: EventoCreate, actor: Usuario
     ) -> EventoResponse:
-        self._validate_date_range(data.fecha_inicio, data.fecha_fin)
-        self._validate_schedule(data.hora_inicio, data.hora_fin)
         nombre = self._normalize_required(data.nombre_evento, "nombre del evento")
         nombre_repetido = await self.eventos.count_by_name(nombre) > 0
+        if await self.eventos.get_area_activa(data.id_area) is None:
+            raise AreaNotFoundError("El área indicada no existe o está inactiva.")
+        await self._validate_politica(data.politica)
 
         try:
-            lugar = await self._create_lugar(data.lugar)
+            politica = await self.eventos.create_politica_evento(
+                fecha_inicio=data.politica.fecha_inicio,
+                fecha_fin=data.politica.fecha_fin,
+            )
+            for detalle in data.politica.detalles:
+                await self.eventos.create_detalle_politica(
+                    id_politica_evento=politica.id_politica_evento,
+                    id_beneficio=detalle.id_beneficio,
+                    id_categoria=detalle.id_categoria,
+                    entradas_gratuitas=detalle.entradas_gratuitas,
+                )
             evento = await self.eventos.create_evento(
                 nombre_evento=nombre,
                 descripcion=self._normalize_optional(data.descripcion),
-                fecha_inicio=data.fecha_inicio,
-                fecha_fin=data.fecha_fin,
-                aforo=data.aforo,
-                creado_por=actor.id_usuario,
+                id_politica_evento=politica.id_politica_evento,
+                id_area=data.id_area,
             )
-            programacion = await self.eventos.create_programacion(
-                id_evento=evento.id_evento,
-                id_lugar=lugar.id_lugar if lugar else None,
-                modalidad=data.modalidad,
-                enlace_general=self._normalize_optional(data.enlace_general),
-            )
-            for fecha in generar_dias_evento(data.fecha_inicio, data.fecha_fin):
-                await self.eventos.create_dia(
-                    id_programacion_evento=programacion.id_programacion_evento,
-                    fecha=fecha,
-                    hora_inicio=data.hora_inicio,
-                    hora_fin=data.hora_fin,
-                    enlace=self._normalize_optional(data.enlace_general),
-                )
-            audit_values = self._evento_values(evento)
+            audit_values = {"id_evento": evento.id_evento, "nombre_evento": nombre}
             if nombre_repetido:
                 audit_values["advertencia_nombre_repetido"] = True
             await self.auditoria.create(
@@ -185,7 +223,7 @@ class EventoService:
         fecha_desde: date | None,
         fecha_hasta: date | None,
         estado: EventoEstado | None,
-        modalidad: EventoModalidad | None,
+        id_area: int | None,
         page: int,
         page_size: int,
     ) -> EventoListResponse:
@@ -195,7 +233,7 @@ class EventoService:
             fecha_desde=fecha_desde,
             fecha_hasta=fecha_hasta,
             estado=estado,
-            modalidad=modalidad,
+            id_area=id_area,
             page=page,
             page_size=page_size,
         )
@@ -221,17 +259,13 @@ class EventoService:
             )
         if "descripcion" in values:
             values["descripcion"] = self._normalize_optional(values["descripcion"])
-
-        nueva_fecha_inicio = values.get("fecha_inicio", evento.fecha_inicio)
-        nueva_fecha_fin = values.get("fecha_fin", evento.fecha_fin)
-        if "fecha_inicio" in values or "fecha_fin" in values:
-            self._validate_date_range(nueva_fecha_inicio, nueva_fecha_fin)
+        if "id_area" in values:
+            if await self.eventos.get_area_activa(values["id_area"]) is None:
+                raise AreaNotFoundError("El área indicada no existe o está inactiva.")
 
         anterior = self._evento_values(evento)
         try:
             await self.eventos.update_evento(evento, values)
-            if "fecha_inicio" in values or "fecha_fin" in values:
-                await self._sync_dias(evento)
             await self.auditoria.create(
                 id_usuario=actor.id_usuario,
                 id_modulo=await self._id_modulo(),
@@ -252,34 +286,246 @@ class EventoService:
             raise
         return await self.obtener_evento(id_evento)
 
-    async def obtener_programacion(
-        self, id_evento: int
+    # -- Política de evento -----------------------------------------------
+
+    async def actualizar_politica(
+        self, *, id_evento: int, data: PoliticaEventoUpdate, actor: Usuario
+    ) -> EventoResponse:
+        evento = await self._get_evento_for_update(id_evento)
+        self.validar_evento_abierto(evento)
+        await self._validate_politica(data)
+        politica = await self.db.get(PoliticaEvento, evento.id_politica_evento)
+        assert politica is not None
+        anterior = {
+            "fecha_inicio": politica.fecha_inicio.isoformat(),
+            "fecha_fin": politica.fecha_fin.isoformat(),
+        }
+        try:
+            await self.eventos.update_politica_evento(
+                politica,
+                fecha_inicio=data.fecha_inicio,
+                fecha_fin=data.fecha_fin,
+            )
+            await self.eventos.clear_detalles_politica(politica.id_politica_evento)
+            for detalle in data.detalles:
+                await self.eventos.create_detalle_politica(
+                    id_politica_evento=politica.id_politica_evento,
+                    id_beneficio=detalle.id_beneficio,
+                    id_categoria=detalle.id_categoria,
+                    entradas_gratuitas=detalle.entradas_gratuitas,
+                )
+            await self.auditoria.create(
+                id_usuario=actor.id_usuario,
+                id_modulo=await self._id_modulo(),
+                entidad="evento",
+                id_entidad=id_evento,
+                accion="ACTUALIZAR_POLITICA_EVENTO",
+                valor_anterior=anterior,
+                valor_nuevo={
+                    "fecha_inicio": data.fecha_inicio.isoformat(),
+                    "fecha_fin": data.fecha_fin.isoformat(),
+                },
+            )
+            await self.db.commit()
+        except Exception:
+            await self.db.rollback()
+            raise
+        return await self.obtener_evento(id_evento)
+
+    # -- ProgramacionEvento -------------------------------------------
+
+    async def crear_programacion(
+        self, *, id_evento: int, data: ProgramacionEventoCreate, actor: Usuario
     ) -> ProgramacionEventoResponse:
-        detalle = await self.eventos.get_detallado(id_evento)
-        if detalle is None:
+        evento = await self._get_evento_for_update(id_evento)
+        self.validar_evento_abierto(evento)
+
+        try:
+            lugar = await self._create_lugar(data.lugar)
+            programacion = await self.eventos.create_programacion(
+                id_evento=id_evento,
+                id_lugar=lugar.id_lugar if lugar else None,
+                modalidad=data.modalidad,
+                enlace_general=self._normalize_optional(data.enlace_general),
+            )
+            for dia in data.dias:
+                await self.eventos.create_dia(
+                    id_programacion_evento=programacion.id_programacion_evento,
+                    fecha=dia.fecha,
+                    hora_inicio=dia.hora_inicio,
+                    hora_fin=dia.hora_fin,
+                    enlace=self._normalize_optional(dia.enlace),
+                )
+            await self.auditoria.create(
+                id_usuario=actor.id_usuario,
+                id_modulo=await self._id_modulo(),
+                entidad="evento",
+                id_entidad=id_evento,
+                accion="CREAR_PROGRAMACION_EVENTO",
+                valor_nuevo=self._programacion_values(programacion, lugar),
+            )
+            await self.db.commit()
+        except IntegrityError as exc:
+            await self.db.rollback()
+            raise EventoPersistenceConflictError(
+                "No se pudo crear la programación por un conflicto de integridad."
+            ) from exc
+        except Exception:
+            await self.db.rollback()
+            raise
+        return await self.obtener_programacion(
+            id_evento=id_evento, id_programacion=programacion.id_programacion_evento
+        )
+
+    async def obtener_programacion(
+        self, *, id_evento: int, id_programacion: int
+    ) -> ProgramacionEventoResponse:
+        programacion = await self.eventos.get_programacion_by_id(
+            id_evento=id_evento, id_programacion_evento=id_programacion
+        )
+        if programacion is None:
+            raise ProgramacionNotFoundError("Programación no encontrada.")
+        lugar = (
+            await self.eventos.get_lugar(programacion.id_lugar)
+            if programacion.id_lugar is not None
+            else None
+        )
+        primera_fecha = await self.eventos.get_primera_fecha(
+            programacion.id_programacion_evento
+        )
+        return self._programacion_response(programacion, lugar, primera_fecha)
+
+    async def listar_programaciones(
+        self,
+        *,
+        id_evento: int,
+        fecha_desde: date | None,
+        fecha_hasta: date | None,
+        modalidad: EventoModalidad | None,
+        estado: EventoEstado | None,
+        page: int,
+        page_size: int,
+    ) -> ProgramacionEventoListResponse:
+        if await self.eventos.get_by_id(id_evento) is None:
             raise EventoNotFoundError("Evento no encontrado.")
-        return self._programacion_response(detalle.programacion, detalle.lugar)
+        self._validate_filter_dates(fecha_desde, fecha_hasta)
+        rows, total = await self.eventos.list_programaciones(
+            id_evento=id_evento,
+            fecha_desde=fecha_desde,
+            fecha_hasta=fecha_hasta,
+            modalidad=modalidad,
+            estado=estado,
+            page=page,
+            page_size=page_size,
+        )
+        items = []
+        for programacion in rows:
+            lugar = (
+                await self.eventos.get_lugar(programacion.id_lugar)
+                if programacion.id_lugar is not None
+                else None
+            )
+            primera_fecha = await self.eventos.get_primera_fecha(
+                programacion.id_programacion_evento
+            )
+            items.append(
+                self._programacion_response(programacion, lugar, primera_fecha)
+            )
+        return ProgramacionEventoListResponse(
+            items=items,
+            total=total,
+            page=page,
+            page_size=page_size,
+            pages=math.ceil(total / page_size) if total else 0,
+        )
+
+    async def listar_programaciones_transversal(
+        self,
+        *,
+        fecha_desde: date | None,
+        fecha_hasta: date | None,
+        id_empresa: int | None,
+        estado: EventoEstado | None,
+        page: int,
+        page_size: int,
+    ) -> ProgramacionEventoTransversalListResponse:
+        self._validate_filter_dates(fecha_desde, fecha_hasta)
+        rows, total = await self.eventos.list_programaciones_transversal(
+            fecha_desde=fecha_desde,
+            fecha_hasta=fecha_hasta,
+            id_empresa=id_empresa,
+            estado=estado,
+            page=page,
+            page_size=page_size,
+        )
+        items = []
+        for programacion, evento, primera_fecha in rows:
+            lugar = (
+                await self.eventos.get_lugar(programacion.id_lugar)
+                if programacion.id_lugar is not None
+                else None
+            )
+            items.append(
+                ProgramacionEventoTransversalResponse(
+                    **self._programacion_response(
+                        programacion, lugar, primera_fecha
+                    ).model_dump(),
+                    nombre_evento=evento.nombre_evento,
+                )
+            )
+        return ProgramacionEventoTransversalListResponse(
+            items=items,
+            total=total,
+            page=page,
+            page_size=page_size,
+            pages=math.ceil(total / page_size) if total else 0,
+        )
 
     async def actualizar_programacion(
         self,
         *,
         id_evento: int,
+        id_programacion: int,
         data: ProgramacionEventoUpdate,
         actor: Usuario,
     ) -> ProgramacionEventoResponse:
         evento = await self._get_evento_for_update(id_evento)
         self.validar_evento_abierto(evento)
-        programacion = await self.eventos.get_programacion(
-            id_evento, for_update=True
+        programacion = await self.eventos.get_programacion_by_id(
+            id_evento=id_evento,
+            id_programacion_evento=id_programacion,
+            for_update=True,
         )
         if programacion is None:
-            raise ProgramacionNotFoundError("Programación del evento no encontrada.")
+            raise ProgramacionNotFoundError("Programación no encontrada.")
+        self.validar_programacion_abierta(programacion)
         lugar_actual = (
-            await self.db.get(Lugar, programacion.id_lugar)
+            await self.eventos.get_lugar(programacion.id_lugar)
             if programacion.id_lugar is not None
             else None
         )
         anterior = self._programacion_values(programacion, lugar_actual)
+
+        modalidad_efectiva = (
+            data.modalidad if data.modalidad is not None else programacion.modalidad
+        )
+        tendra_lugar = (
+            data.lugar is not None
+            if "lugar" in data.model_fields_set
+            else lugar_actual is not None
+        )
+        if (
+            modalidad_efectiva in (EventoModalidad.PRESENCIAL, EventoModalidad.HIBRIDO)
+            and not tendra_lugar
+        ):
+            raise LugarRequeridoError(
+                "Debe especificar un lugar para programaciones presenciales o híbridas."
+            )
+        if modalidad_efectiva == EventoModalidad.VIRTUAL and tendra_lugar:
+            raise LugarNoPermitidoError(
+                "Las programaciones virtuales no admiten un lugar físico."
+            )
+
         values = data.model_dump(exclude_unset=True, exclude={"lugar"})
         if "enlace_general" in values:
             values["enlace_general"] = self._normalize_optional(
@@ -316,28 +562,89 @@ class EventoService:
         except Exception:
             await self.db.rollback()
             raise
-        return await self.obtener_programacion(id_evento)
+        return await self.obtener_programacion(
+            id_evento=id_evento, id_programacion=id_programacion
+        )
+
+    # -- Días de la programación ---------------------------------------
 
     async def listar_dias(
-        self, id_evento: int
+        self, *, id_evento: int, id_programacion: int
     ) -> list[DetalleProgramacionResponse]:
-        if await self.eventos.get_by_id(id_evento) is None:
-            raise EventoNotFoundError("Evento no encontrado.")
-        dias = await self.eventos.list_dias(id_evento)
+        if (
+            await self.eventos.get_programacion_by_id(
+                id_evento=id_evento, id_programacion_evento=id_programacion
+            )
+            is None
+        ):
+            raise ProgramacionNotFoundError("Programación no encontrada.")
+        dias = await self.eventos.list_dias(id_programacion)
         return [DetalleProgramacionResponse.model_validate(dia) for dia in dias]
+
+    async def crear_dia(
+        self,
+        *,
+        id_evento: int,
+        id_programacion: int,
+        data: ProgramacionDiaCreate,
+        actor: Usuario,
+    ) -> DetalleProgramacionResponse:
+        evento = await self._get_evento_for_update(id_evento)
+        self.validar_evento_abierto(evento)
+        programacion = await self.eventos.get_programacion_by_id(
+            id_evento=id_evento,
+            id_programacion_evento=id_programacion,
+            for_update=True,
+        )
+        if programacion is None:
+            raise ProgramacionNotFoundError("Programación no encontrada.")
+        self.validar_programacion_abierta(programacion)
+        try:
+            dia = await self.eventos.create_dia(
+                id_programacion_evento=id_programacion,
+                fecha=data.fecha,
+                hora_inicio=data.hora_inicio,
+                hora_fin=data.hora_fin,
+                enlace=self._normalize_optional(data.enlace),
+            )
+            await self.auditoria.create(
+                id_usuario=actor.id_usuario,
+                id_modulo=await self._id_modulo(),
+                entidad="evento",
+                id_entidad=id_evento,
+                accion="CREAR_DIA_EVENTO",
+                valor_nuevo=self._dia_values(dia),
+            )
+            await self.db.commit()
+        except IntegrityError as exc:
+            await self.db.rollback()
+            raise EventoPersistenceConflictError(
+                "Ya existe un día con esa fecha en la programación."
+            ) from exc
+        except Exception:
+            await self.db.rollback()
+            raise
+        return DetalleProgramacionResponse.model_validate(dia)
 
     async def actualizar_dia(
         self,
         *,
         id_evento: int,
+        id_programacion: int,
         id_dia: int,
         data: DetalleProgramacionUpdate,
         actor: Usuario,
     ) -> DetalleProgramacionResponse:
         evento = await self._get_evento_for_update(id_evento)
         self.validar_evento_abierto(evento)
+        programacion = await self.eventos.get_programacion_by_id(
+            id_evento=id_evento, id_programacion_evento=id_programacion, for_update=True
+        )
+        if programacion is None:
+            raise ProgramacionNotFoundError("Programación no encontrada.")
+        self.validar_programacion_abierta(programacion)
         dia = await self.eventos.get_dia(
-            id_evento=id_evento, id_dia=id_dia, for_update=True
+            id_programacion_evento=id_programacion, id_dia=id_dia, for_update=True
         )
         if dia is None:
             raise DiaNotFoundError("Día del evento no encontrado.")
@@ -370,6 +677,178 @@ class EventoService:
             await self.db.rollback()
             raise
         return DetalleProgramacionResponse.model_validate(dia)
+
+    async def eliminar_dia(
+        self, *, id_evento: int, id_programacion: int, id_dia: int, actor: Usuario
+    ) -> None:
+        evento = await self._get_evento_for_update(id_evento)
+        self.validar_evento_abierto(evento)
+        programacion = await self.eventos.get_programacion_by_id(
+            id_evento=id_evento, id_programacion_evento=id_programacion, for_update=True
+        )
+        if programacion is None:
+            raise ProgramacionNotFoundError("Programación no encontrada.")
+        self.validar_programacion_abierta(programacion)
+        dia = await self.eventos.get_dia(
+            id_programacion_evento=id_programacion, id_dia=id_dia, for_update=True
+        )
+        if dia is None:
+            raise DiaNotFoundError("Día del evento no encontrado.")
+        if await self.eventos.count_dias(id_programacion) <= 1:
+            raise UltimoDiaNoEliminableError(
+                "La programación debe tener al menos un día."
+            )
+        try:
+            await self.auditoria.create(
+                id_usuario=actor.id_usuario,
+                id_modulo=await self._id_modulo(),
+                entidad="evento",
+                id_entidad=id_evento,
+                accion="ELIMINAR_DIA_EVENTO",
+                valor_anterior=self._dia_values(dia),
+                valor_nuevo=None,
+            )
+            await self.eventos.delete_dia(dia)
+            await self.db.commit()
+        except Exception:
+            await self.db.rollback()
+            raise
+
+    # -- Responsables de la programación ------------------------------
+
+    async def crear_responsable(
+        self,
+        *,
+        id_evento: int,
+        id_programacion: int,
+        data: ResponsableEventoCreate,
+        actor: Usuario,
+    ) -> ResponsableEventoResponse:
+        evento = await self._get_evento_for_update(id_evento)
+        self.validar_evento_abierto(evento)
+        programacion = await self.eventos.get_programacion_by_id(
+            id_evento=id_evento, id_programacion_evento=id_programacion, for_update=True
+        )
+        if programacion is None:
+            raise ProgramacionNotFoundError("Programación no encontrada.")
+        self.validar_programacion_abierta(programacion)
+        usuario = await self.usuarios.get_by_id(data.id_usuario)
+        if usuario is None:
+            raise EventoServiceError("El usuario indicado no existe.")
+        if (
+            await self.eventos.get_responsable_activo(
+                id_programacion_evento=id_programacion, id_usuario=data.id_usuario
+            )
+            is not None
+        ):
+            raise ResponsableDuplicadoError(
+                "El usuario ya es responsable de esta programación."
+            )
+        try:
+            responsable = await self.eventos.create_responsable(
+                id_programacion_evento=id_programacion, id_usuario=data.id_usuario
+            )
+            await self.auditoria.create(
+                id_usuario=actor.id_usuario,
+                id_modulo=await self._id_modulo(),
+                entidad="evento",
+                id_entidad=id_evento,
+                accion="ASIGNAR_RESPONSABLE_EVENTO",
+                valor_nuevo={
+                    "id_responsable_evento": responsable.id_responsable_evento,
+                    "id_usuario": data.id_usuario,
+                },
+            )
+            await self.db.commit()
+        except IntegrityError as exc:
+            await self.db.rollback()
+            raise ResponsableDuplicadoError(
+                "El usuario ya es responsable de esta programación."
+            ) from exc
+        except Exception:
+            await self.db.rollback()
+            raise
+        return ResponsableEventoResponse(
+            id_responsable_evento=responsable.id_responsable_evento,
+            id_programacion_evento=responsable.id_programacion_evento,
+            id_usuario=usuario.id_usuario,
+            nombre_usuario=usuario.nombre_usuario,
+            estado=responsable.estado,
+        )
+
+    async def listar_responsables(
+        self, *, id_evento: int, id_programacion: int
+    ) -> list[ResponsableEventoResponse]:
+        if (
+            await self.eventos.get_programacion_by_id(
+                id_evento=id_evento, id_programacion_evento=id_programacion
+            )
+            is None
+        ):
+            raise ProgramacionNotFoundError("Programación no encontrada.")
+        rows = await self.eventos.list_responsables(id_programacion)
+        return [
+            ResponsableEventoResponse(
+                id_responsable_evento=responsable.id_responsable_evento,
+                id_programacion_evento=responsable.id_programacion_evento,
+                id_usuario=usuario.id_usuario,
+                nombre_usuario=usuario.nombre_usuario,
+                estado=responsable.estado,
+            )
+            for responsable, usuario in rows
+        ]
+
+    async def cambiar_estado_responsable(
+        self,
+        *,
+        id_evento: int,
+        id_programacion: int,
+        id_responsable: int,
+        estado: bool,
+        actor: Usuario,
+    ) -> ResponsableEventoResponse:
+        evento = await self._get_evento_for_update(id_evento)
+        self.validar_evento_abierto(evento)
+        programacion = await self.eventos.get_programacion_by_id(
+            id_evento=id_evento, id_programacion_evento=id_programacion, for_update=True
+        )
+        if programacion is None:
+            raise ProgramacionNotFoundError("Programación no encontrada.")
+        self.validar_programacion_abierta(programacion)
+        responsable = await self.eventos.get_responsable_by_id(
+            id_programacion_evento=id_programacion, id_responsable=id_responsable
+        )
+        if responsable is None:
+            raise ResponsableNotFoundError("Responsable no encontrado.")
+        usuario = await self.usuarios.get_by_id(responsable.id_usuario)
+        assert usuario is not None
+        try:
+            await self.eventos.set_responsable_estado(responsable, estado=estado)
+            await self.auditoria.create(
+                id_usuario=actor.id_usuario,
+                id_modulo=await self._id_modulo(),
+                entidad="evento",
+                id_entidad=id_evento,
+                accion=(
+                    "REACTIVAR_RESPONSABLE_EVENTO"
+                    if estado
+                    else "DESACTIVAR_RESPONSABLE_EVENTO"
+                ),
+                valor_nuevo={"estado": estado},
+            )
+            await self.db.commit()
+        except Exception:
+            await self.db.rollback()
+            raise
+        return ResponsableEventoResponse(
+            id_responsable_evento=responsable.id_responsable_evento,
+            id_programacion_evento=responsable.id_programacion_evento,
+            id_usuario=usuario.id_usuario,
+            nombre_usuario=usuario.nombre_usuario,
+            estado=responsable.estado,
+        )
+
+    # -- Flyer ----------------------------------------------------------
 
     async def subir_flyer(
         self, *, id_evento: int, flyer: UploadFile, actor: Usuario
@@ -404,9 +883,7 @@ class EventoService:
                 entidad="evento",
                 id_entidad=id_evento,
                 accion=(
-                    "REEMPLAZAR_FLYER_EVENTO"
-                    if old_url
-                    else "ADJUNTAR_FLYER_EVENTO"
+                    "REEMPLAZAR_FLYER_EVENTO" if old_url else "ADJUNTAR_FLYER_EVENTO"
                 ),
                 valor_anterior={"flyer_url": old_url},
                 valor_nuevo={"flyer_url": new_url},
@@ -430,6 +907,8 @@ class EventoService:
         if path.parent != self._flyer_root() or not path.is_file():
             raise FlyerNotFoundError("Flyer no encontrado.")
         return path
+
+    # -- Estados ----------------------------------------------------------
 
     async def finalizar_evento(
         self, *, id_evento: int, motivo: str | None, actor: Usuario
@@ -481,17 +960,75 @@ class EventoService:
             raise
         return await self.obtener_evento(id_evento)
 
+    async def finalizar_programacion(
+        self, *, id_evento: int, id_programacion: int, motivo: str | None, actor: Usuario
+    ) -> ProgramacionEventoResponse:
+        return await self._change_state_programacion(
+            id_evento=id_evento,
+            id_programacion=id_programacion,
+            expected=EventoEstado.ABIERTO,
+            target=EventoEstado.FINALIZADO,
+            action="FINALIZAR_PROGRAMACION",
+            motivo=motivo,
+            actor=actor,
+        )
+
+    async def reabrir_programacion(
+        self, *, id_evento: int, id_programacion: int, motivo: str, actor: Usuario
+    ) -> ProgramacionEventoResponse:
+        return await self._change_state_programacion(
+            id_evento=id_evento,
+            id_programacion=id_programacion,
+            expected=EventoEstado.FINALIZADO,
+            target=EventoEstado.ABIERTO,
+            action="REABRIR_PROGRAMACION",
+            motivo=motivo,
+            actor=actor,
+        )
+
+    async def inactivar_programacion(
+        self, *, id_evento: int, id_programacion: int, motivo: str | None, actor: Usuario
+    ) -> ProgramacionEventoResponse:
+        evento = await self._get_evento_for_update(id_evento)
+        self.validar_evento_abierto(evento)
+        programacion = await self.eventos.get_programacion_by_id(
+            id_evento=id_evento, id_programacion_evento=id_programacion, for_update=True
+        )
+        if programacion is None:
+            raise ProgramacionNotFoundError("Programación no encontrada.")
+        if programacion.estado == EventoEstado.INACTIVO:
+            raise InvalidStateTransitionError("La programación ya está inactiva.")
+        anterior = programacion.estado
+        try:
+            programacion.estado = EventoEstado.INACTIVO
+            await self.db.flush()
+            await self.auditoria.create(
+                id_usuario=actor.id_usuario,
+                id_modulo=await self._id_modulo(),
+                entidad="programacion_evento",
+                id_entidad=id_programacion,
+                accion="INACTIVAR_PROGRAMACION",
+                valor_anterior={"estado": anterior.value},
+                valor_nuevo={"estado": EventoEstado.INACTIVO.value},
+                motivo=motivo,
+            )
+            await self.db.commit()
+        except Exception:
+            await self.db.rollback()
+            raise
+        return await self.obtener_programacion(
+            id_evento=id_evento, id_programacion=id_programacion
+        )
+
     async def eliminar_evento(self, *, id_evento: int, actor: Usuario) -> None:
         evento = await self._get_evento_for_update(id_evento)
-        if await self.eventos.has_participant_dependencies(id_evento):
+        if await self.eventos.has_evento_contacto_dependencies(id_evento):
             raise EventoDependencyError(
-                "No se puede eliminar el evento porque tiene participantes asociados."
+                "No se puede eliminar el evento porque tiene contactos asociados."
             )
-        programacion = await self.eventos.get_programacion(
-            id_evento, for_update=True
-        )
-        old_lugar_id = programacion.id_lugar if programacion else None
+        detalle = await self.eventos.get_detallado(id_evento)
         old_flyer_url = evento.flyer_url
+        id_politica_evento = evento.id_politica_evento
 
         try:
             await self.auditoria.create(
@@ -504,7 +1041,13 @@ class EventoService:
                 valor_nuevo=None,
             )
             await self.eventos.delete_evento(evento)
-            await self.eventos.delete_lugar_if_orphan(old_lugar_id)
+            if detalle is not None:
+                await self.eventos.clear_detalles_politica(id_politica_evento)
+                politica = await self.db.get(
+                    type(detalle.politica), id_politica_evento
+                )
+                if politica is not None:
+                    await self.db.delete(politica)
             await self.db.commit()
         except IntegrityError as exc:
             await self.db.rollback()
@@ -527,7 +1070,7 @@ class EventoService:
         fecha_desde: date | None,
         fecha_hasta: date | None,
         estado: EventoEstado | None,
-        modalidad: EventoModalidad | None,
+        id_area: int | None,
     ) -> bytes:
         self._validate_filter_dates(fecha_desde, fecha_hasta)
         rows, _ = await self.eventos.list_detallado(
@@ -535,7 +1078,7 @@ class EventoService:
             fecha_desde=fecha_desde,
             fecha_hasta=fecha_hasta,
             estado=estado,
-            modalidad=modalidad,
+            id_area=id_area,
             page=1,
             page_size=None,
         )
@@ -547,11 +1090,9 @@ class EventoService:
                 "ID",
                 "Nombre",
                 "Descripción",
-                "Fecha inicio",
-                "Fecha fin",
-                "Modalidad",
-                "Lugar",
-                "Aforo",
+                "Área",
+                "Política: Fecha inicio",
+                "Política: Fecha fin",
                 "Estado",
             ]
         )
@@ -561,11 +1102,9 @@ class EventoService:
                     row.evento.id_evento,
                     row.evento.nombre_evento,
                     row.evento.descripcion or "",
-                    row.evento.fecha_inicio,
-                    row.evento.fecha_fin,
-                    row.programacion.modalidad.value,
-                    self._lugar_text(row.lugar),
-                    row.evento.aforo,
+                    row.area.nombre_area,
+                    row.politica.fecha_inicio,
+                    row.politica.fecha_fin,
                     row.evento.estado.value,
                 ]
             )
@@ -573,34 +1112,6 @@ class EventoService:
         workbook.save(output)
         workbook.close()
         return output.getvalue()
-
-    async def _sync_dias(self, evento: Evento) -> None:
-        programacion = await self.eventos.get_programacion(
-            evento.id_evento, for_update=True
-        )
-        if programacion is None:
-            raise ProgramacionNotFoundError("Programación del evento no encontrada.")
-        actuales = await self.eventos.list_dias(evento.id_evento, for_update=True)
-        if not actuales:
-            raise ProgramacionNotFoundError("El evento no tiene días configurados.")
-        actuales_por_fecha = {dia.fecha: dia for dia in actuales}
-        objetivo = generar_dias_evento(evento.fecha_inicio, evento.fecha_fin)
-        objetivo_set = set(objetivo)
-        plantilla = actuales[0]
-
-        for dia in actuales:
-            if dia.fecha not in objetivo_set:
-                await self.eventos.delete_dia(dia)
-        for fecha in objetivo:
-            if fecha not in actuales_por_fecha:
-                await self.eventos.create_dia(
-                    id_programacion_evento=programacion.id_programacion_evento,
-                    fecha=fecha,
-                    hora_inicio=plantilla.hora_inicio,
-                    hora_fin=plantilla.hora_fin,
-                    enlace=plantilla.enlace,
-                )
-        await self.db.flush()
 
     async def _change_state(
         self,
@@ -636,6 +1147,49 @@ class EventoService:
             raise
         return await self.obtener_evento(id_evento)
 
+    async def _change_state_programacion(
+        self,
+        *,
+        id_evento: int,
+        id_programacion: int,
+        expected: EventoEstado,
+        target: EventoEstado,
+        action: str,
+        motivo: str | None,
+        actor: Usuario,
+    ) -> ProgramacionEventoResponse:
+        evento = await self._get_evento_for_update(id_evento)
+        self.validar_evento_abierto(evento)
+        programacion = await self.eventos.get_programacion_by_id(
+            id_evento=id_evento, id_programacion_evento=id_programacion, for_update=True
+        )
+        if programacion is None:
+            raise ProgramacionNotFoundError("Programación no encontrada.")
+        if programacion.estado != expected:
+            raise InvalidStateTransitionError(
+                f"La programación debe estar {expected.value} para ejecutar esta operación."
+            )
+        try:
+            programacion.estado = target
+            await self.db.flush()
+            await self.auditoria.create(
+                id_usuario=actor.id_usuario,
+                id_modulo=await self._id_modulo(),
+                entidad="programacion_evento",
+                id_entidad=id_programacion,
+                accion=action,
+                valor_anterior={"estado": expected.value},
+                valor_nuevo={"estado": target.value},
+                motivo=motivo,
+            )
+            await self.db.commit()
+        except Exception:
+            await self.db.rollback()
+            raise
+        return await self.obtener_programacion(
+            id_evento=id_evento, id_programacion=id_programacion
+        )
+
     async def _get_evento_for_update(self, id_evento: int) -> Evento:
         evento = await self.eventos.get_by_id_for_update(id_evento)
         if evento is None:
@@ -647,6 +1201,21 @@ class EventoService:
             return None
         return await self.eventos.create_lugar(**data.model_dump())
 
+    async def _validate_politica(
+        self, politica: PoliticaEventoCreate | PoliticaEventoUpdate
+    ) -> None:
+        self._validate_date_range(politica.fecha_inicio, politica.fecha_fin)
+        for detalle in politica.detalles:
+            beneficio = await self.eventos.get_beneficio_activo(detalle.id_beneficio)
+            if beneficio is None:
+                raise BeneficioNotFoundError(
+                    "El beneficio indicado no existe o está inactivo."
+                )
+            if await self.eventos.get_categoria_activa(detalle.id_categoria) is None:
+                raise CategoriaNotFoundError(
+                    "La categoría indicada no existe o está inactiva."
+                )
+
     async def _id_modulo(self) -> int | None:
         modulo = await self.usuarios.get_module_by_name(MODULO_EVENTOS)
         return modulo.id_modulo if modulo else None
@@ -656,6 +1225,13 @@ class EventoService:
         if evento.estado != EventoEstado.ABIERTO:
             raise EventoNotEditableError(
                 "Solo los eventos abiertos pueden modificarse."
+            )
+
+    @staticmethod
+    def validar_programacion_abierta(programacion: ProgramacionEvento) -> None:
+        if programacion.estado != EventoEstado.ABIERTO:
+            raise ProgramacionNotEditableError(
+                "Solo las programaciones abiertas pueden modificarse."
             )
 
     @staticmethod
@@ -712,9 +1288,7 @@ class EventoService:
             "id_evento": evento.id_evento,
             "nombre_evento": evento.nombre_evento,
             "descripcion": evento.descripcion,
-            "fecha_inicio": evento.fecha_inicio.isoformat(),
-            "fecha_fin": evento.fecha_fin.isoformat(),
-            "aforo": evento.aforo,
+            "id_area": evento.id_area,
             "flyer_url": evento.flyer_url,
             "estado": evento.estado.value,
         }
@@ -775,22 +1349,34 @@ class EventoService:
             id_evento=evento.id_evento,
             nombre_evento=evento.nombre_evento,
             descripcion=evento.descripcion,
-            fecha_inicio=evento.fecha_inicio,
-            fecha_fin=evento.fecha_fin,
-            aforo=evento.aforo,
+            id_area=detalle.area.id_area,
+            nombre_area=detalle.area.nombre_area,
             flyer_url=evento.flyer_url,
             estado=evento.estado,
-            creado_por=evento.creado_por,
-            creado_en=evento.creado_en,
-            actualizado_en=evento.actualizado_en,
-            programacion=cls._programacion_response(
-                detalle.programacion, detalle.lugar
+            politica=PoliticaEventoResponse(
+                id_politica_evento=detalle.politica.id_politica_evento,
+                fecha_inicio=detalle.politica.fecha_inicio,
+                fecha_fin=detalle.politica.fecha_fin,
+                detalles=[
+                    DetallePoliticaEventoResponse(
+                        id_detalle_politica_evento=item.id_detalle_politica_evento,
+                        id_beneficio=beneficio.id_beneficio,
+                        nombre_beneficio=beneficio.nombre,
+                        id_categoria=categoria.id_categoria,
+                        nombre_categoria=categoria.nombre_categoria,
+                        entradas_gratuitas=item.entradas_gratuitas,
+                    )
+                    for item, beneficio, categoria in detalle.detalles
+                ],
             ),
         )
 
     @classmethod
     def _programacion_response(
-        cls, programacion: ProgramacionEvento, lugar: Lugar | None
+        cls,
+        programacion: ProgramacionEvento,
+        lugar: Lugar | None,
+        primera_fecha: date | None,
     ) -> ProgramacionEventoResponse:
         return ProgramacionEventoResponse(
             id_programacion_evento=programacion.id_programacion_evento,
@@ -799,6 +1385,7 @@ class EventoService:
             enlace_general=programacion.enlace_general,
             estado=programacion.estado,
             lugar=LugarResponse.model_validate(lugar) if lugar else None,
+            primera_fecha=primera_fecha,
         )
 
     @staticmethod

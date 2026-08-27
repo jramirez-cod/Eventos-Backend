@@ -26,11 +26,21 @@ from app.modules.eventos.dto import (
     EventoReabrirRequest,
     EventoResponse,
     EventoUpdate,
+    PoliticaEventoUpdate,
+    ProgramacionDiaCreate,
+    ProgramacionEventoCreate,
+    ProgramacionEventoListResponse,
     ProgramacionEventoResponse,
+    ProgramacionEventoTransversalListResponse,
     ProgramacionEventoUpdate,
+    ResponsableEventoCreate,
+    ResponsableEventoResponse,
 )
 from app.modules.eventos.models import EventoEstado, EventoModalidad
 from app.modules.eventos.service import (
+    AreaNotFoundError,
+    BeneficioNotFoundError,
+    CategoriaNotFoundError,
     DiaNotFoundError,
     EventoDependencyError,
     EventoNotEditableError,
@@ -44,7 +54,13 @@ from app.modules.eventos.service import (
     InvalidFlyerError,
     InvalidScheduleError,
     InvalidStateTransitionError,
+    LugarNoPermitidoError,
+    LugarRequeridoError,
+    ProgramacionNotEditableError,
     ProgramacionNotFoundError,
+    ResponsableDuplicadoError,
+    ResponsableNotFoundError,
+    UltimoDiaNoEliminableError,
 )
 from app.modules.usuarios.dependencies import require_permission
 from app.modules.usuarios.models import Usuario
@@ -58,6 +74,8 @@ PERMISO_CAMBIAR_ESTADO = "CAMBIAR_ESTADO_EVENTO"
 PERMISO_REABRIR = "REABRIR_EVENTO"
 PERMISO_ELIMINAR = "ELIMINAR_EVENTO"
 PERMISO_EXPORTAR = "EXPORTAR_EVENTO"
+PERMISO_CAMBIAR_ESTADO_PROGRAMACION = "CAMBIAR_ESTADO_PROGRAMACION"
+PERMISO_REABRIR_PROGRAMACION = "REABRIR_PROGRAMACION"
 
 router = APIRouter(prefix="/eventos", tags=["Eventos"])
 
@@ -67,8 +85,12 @@ def _raise_http_error(exc: EventoServiceError) -> None:
         exc,
         (
             EventoNotFoundError,
+            AreaNotFoundError,
+            BeneficioNotFoundError,
+            CategoriaNotFoundError,
             ProgramacionNotFoundError,
             DiaNotFoundError,
+            ResponsableNotFoundError,
             FlyerNotFoundError,
         ),
     ):
@@ -84,12 +106,21 @@ def _raise_http_error(exc: EventoServiceError) -> None:
             EventoNotEditableError,
             EventoPersistenceConflictError,
             InvalidStateTransitionError,
+            ProgramacionNotEditableError,
+            ResponsableDuplicadoError,
+            UltimoDiaNoEliminableError,
         ),
     ):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
     if isinstance(
         exc,
-        (InvalidDateRangeError, InvalidScheduleError, InvalidFlyerError),
+        (
+            InvalidDateRangeError,
+            InvalidScheduleError,
+            InvalidFlyerError,
+            LugarRequeridoError,
+            LugarNoPermitidoError,
+        ),
     ):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
@@ -101,12 +132,10 @@ async def listar_eventos(
     fecha_desde: date | None = Query(default=None),
     fecha_hasta: date | None = Query(default=None),
     estado: EventoEstado | None = Query(default=None),
-    modalidad: EventoModalidad | None = Query(default=None),
+    id_area: int | None = Query(default=None, gt=0),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
-    actor: Usuario = Depends(
-        require_permission(MODULO_EVENTOS, PERMISO_CONSULTAR)
-    ),
+    actor: Usuario = Depends(require_permission(MODULO_EVENTOS, PERMISO_CONSULTAR)),
     db: AsyncSession = Depends(get_db),
 ) -> EventoListResponse:
     try:
@@ -115,7 +144,7 @@ async def listar_eventos(
             fecha_desde=fecha_desde,
             fecha_hasta=fecha_hasta,
             estado=estado,
-            modalidad=modalidad,
+            id_area=id_area,
             page=page,
             page_size=page_size,
         )
@@ -130,10 +159,8 @@ async def exportar_eventos(
     fecha_desde: date | None = Query(default=None),
     fecha_hasta: date | None = Query(default=None),
     estado: EventoEstado | None = Query(default=None),
-    modalidad: EventoModalidad | None = Query(default=None),
-    actor: Usuario = Depends(
-        require_permission(MODULO_EVENTOS, PERMISO_EXPORTAR)
-    ),
+    id_area: int | None = Query(default=None, gt=0),
+    actor: Usuario = Depends(require_permission(MODULO_EVENTOS, PERMISO_EXPORTAR)),
     db: AsyncSession = Depends(get_db),
 ) -> StreamingResponse:
     try:
@@ -142,7 +169,7 @@ async def exportar_eventos(
             fecha_desde=fecha_desde,
             fecha_hasta=fecha_hasta,
             estado=estado,
-            modalidad=modalidad,
+            id_area=id_area,
         )
     except EventoServiceError as exc:
         _raise_http_error(exc)
@@ -152,18 +179,14 @@ async def exportar_eventos(
         media_type=(
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         ),
-        headers={
-            "Content-Disposition": 'attachment; filename="eventos.xlsx"'
-        },
+        headers={"Content-Disposition": 'attachment; filename="eventos.xlsx"'},
     )
 
 
 @router.get("/flyers/{filename}", include_in_schema=False)
 async def descargar_flyer(
     filename: str,
-    actor: Usuario = Depends(
-        require_permission(MODULO_EVENTOS, PERMISO_CONSULTAR)
-    ),
+    actor: Usuario = Depends(require_permission(MODULO_EVENTOS, PERMISO_CONSULTAR)),
     db: AsyncSession = Depends(get_db),
 ) -> FileResponse:
     try:
@@ -187,12 +210,38 @@ async def crear_evento(
         raise
 
 
+@router.get(
+    "/programaciones",
+    response_model=ProgramacionEventoTransversalListResponse,
+)
+async def listar_programaciones_transversal(
+    fecha_desde: date | None = Query(default=None),
+    fecha_hasta: date | None = Query(default=None),
+    id_empresa: int | None = Query(default=None, gt=0),
+    estado: EventoEstado | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    actor: Usuario = Depends(require_permission(MODULO_EVENTOS, PERMISO_CONSULTAR)),
+    db: AsyncSession = Depends(get_db),
+) -> ProgramacionEventoTransversalListResponse:
+    try:
+        return await EventoService(db).listar_programaciones_transversal(
+            fecha_desde=fecha_desde,
+            fecha_hasta=fecha_hasta,
+            id_empresa=id_empresa,
+            estado=estado,
+            page=page,
+            page_size=page_size,
+        )
+    except EventoServiceError as exc:
+        _raise_http_error(exc)
+        raise
+
+
 @router.get("/{id_evento}", response_model=EventoResponse)
 async def obtener_evento(
     id_evento: int = Path(gt=0),
-    actor: Usuario = Depends(
-        require_permission(MODULO_EVENTOS, PERMISO_CONSULTAR)
-    ),
+    actor: Usuario = Depends(require_permission(MODULO_EVENTOS, PERMISO_CONSULTAR)),
     db: AsyncSession = Depends(get_db),
 ) -> EventoResponse:
     try:
@@ -206,9 +255,7 @@ async def obtener_evento(
 async def actualizar_evento(
     data: EventoUpdate,
     id_evento: int = Path(gt=0),
-    actor: Usuario = Depends(
-        require_permission(MODULO_EVENTOS, PERMISO_ACTUALIZAR)
-    ),
+    actor: Usuario = Depends(require_permission(MODULO_EVENTOS, PERMISO_ACTUALIZAR)),
     db: AsyncSession = Depends(get_db),
 ) -> EventoResponse:
     try:
@@ -220,36 +267,35 @@ async def actualizar_evento(
         raise
 
 
-@router.get(
-    "/{id_evento}/programacion", response_model=ProgramacionEventoResponse
-)
-async def obtener_programacion(
+@router.put("/{id_evento}/politica", response_model=EventoResponse)
+async def actualizar_politica(
+    data: PoliticaEventoUpdate,
     id_evento: int = Path(gt=0),
-    actor: Usuario = Depends(
-        require_permission(MODULO_EVENTOS, PERMISO_CONSULTAR)
-    ),
+    actor: Usuario = Depends(require_permission(MODULO_EVENTOS, PERMISO_ACTUALIZAR)),
     db: AsyncSession = Depends(get_db),
-) -> ProgramacionEventoResponse:
+) -> EventoResponse:
     try:
-        return await EventoService(db).obtener_programacion(id_evento)
+        return await EventoService(db).actualizar_politica(
+            id_evento=id_evento, data=data, actor=actor
+        )
     except EventoServiceError as exc:
         _raise_http_error(exc)
         raise
 
 
-@router.put(
-    "/{id_evento}/programacion", response_model=ProgramacionEventoResponse
+@router.post(
+    "/{id_evento}/programaciones",
+    response_model=ProgramacionEventoResponse,
+    status_code=status.HTTP_201_CREATED,
 )
-async def actualizar_programacion(
-    data: ProgramacionEventoUpdate,
+async def crear_programacion(
+    data: ProgramacionEventoCreate,
     id_evento: int = Path(gt=0),
-    actor: Usuario = Depends(
-        require_permission(MODULO_EVENTOS, PERMISO_ACTUALIZAR)
-    ),
+    actor: Usuario = Depends(require_permission(MODULO_EVENTOS, PERMISO_ACTUALIZAR)),
     db: AsyncSession = Depends(get_db),
 ) -> ProgramacionEventoResponse:
     try:
-        return await EventoService(db).actualizar_programacion(
+        return await EventoService(db).crear_programacion(
             id_evento=id_evento, data=data, actor=actor
         )
     except EventoServiceError as exc:
@@ -258,37 +304,305 @@ async def actualizar_programacion(
 
 
 @router.get(
-    "/{id_evento}/dias", response_model=list[DetalleProgramacionResponse]
+    "/{id_evento}/programaciones", response_model=ProgramacionEventoListResponse
 )
-async def listar_dias(
+async def listar_programaciones(
     id_evento: int = Path(gt=0),
-    actor: Usuario = Depends(
-        require_permission(MODULO_EVENTOS, PERMISO_CONSULTAR)
-    ),
+    fecha_desde: date | None = Query(default=None),
+    fecha_hasta: date | None = Query(default=None),
+    modalidad: EventoModalidad | None = Query(default=None),
+    estado: EventoEstado | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    actor: Usuario = Depends(require_permission(MODULO_EVENTOS, PERMISO_CONSULTAR)),
     db: AsyncSession = Depends(get_db),
-) -> list[DetalleProgramacionResponse]:
+) -> ProgramacionEventoListResponse:
     try:
-        return await EventoService(db).listar_dias(id_evento)
+        return await EventoService(db).listar_programaciones(
+            id_evento=id_evento,
+            fecha_desde=fecha_desde,
+            fecha_hasta=fecha_hasta,
+            modalidad=modalidad,
+            estado=estado,
+            page=page,
+            page_size=page_size,
+        )
+    except EventoServiceError as exc:
+        _raise_http_error(exc)
+        raise
+
+
+@router.get(
+    "/{id_evento}/programaciones/{id_programacion}",
+    response_model=ProgramacionEventoResponse,
+)
+async def obtener_programacion(
+    id_evento: int = Path(gt=0),
+    id_programacion: int = Path(gt=0),
+    actor: Usuario = Depends(require_permission(MODULO_EVENTOS, PERMISO_CONSULTAR)),
+    db: AsyncSession = Depends(get_db),
+) -> ProgramacionEventoResponse:
+    try:
+        return await EventoService(db).obtener_programacion(
+            id_evento=id_evento, id_programacion=id_programacion
+        )
+    except EventoServiceError as exc:
+        _raise_http_error(exc)
+        raise
+
+
+@router.put(
+    "/{id_evento}/programaciones/{id_programacion}",
+    response_model=ProgramacionEventoResponse,
+)
+async def actualizar_programacion(
+    data: ProgramacionEventoUpdate,
+    id_evento: int = Path(gt=0),
+    id_programacion: int = Path(gt=0),
+    actor: Usuario = Depends(require_permission(MODULO_EVENTOS, PERMISO_ACTUALIZAR)),
+    db: AsyncSession = Depends(get_db),
+) -> ProgramacionEventoResponse:
+    try:
+        return await EventoService(db).actualizar_programacion(
+            id_evento=id_evento,
+            id_programacion=id_programacion,
+            data=data,
+            actor=actor,
+        )
     except EventoServiceError as exc:
         _raise_http_error(exc)
         raise
 
 
 @router.patch(
-    "/{id_evento}/dias/{id_dia}", response_model=DetalleProgramacionResponse
+    "/{id_evento}/programaciones/{id_programacion}/finalizar",
+    response_model=ProgramacionEventoResponse,
+)
+async def finalizar_programacion(
+    data: EventoFinalizarRequest,
+    id_evento: int = Path(gt=0),
+    id_programacion: int = Path(gt=0),
+    actor: Usuario = Depends(
+        require_permission(MODULO_EVENTOS, PERMISO_CAMBIAR_ESTADO_PROGRAMACION)
+    ),
+    db: AsyncSession = Depends(get_db),
+) -> ProgramacionEventoResponse:
+    try:
+        return await EventoService(db).finalizar_programacion(
+            id_evento=id_evento,
+            id_programacion=id_programacion,
+            motivo=data.motivo,
+            actor=actor,
+        )
+    except EventoServiceError as exc:
+        _raise_http_error(exc)
+        raise
+
+
+@router.patch(
+    "/{id_evento}/programaciones/{id_programacion}/reabrir",
+    response_model=ProgramacionEventoResponse,
+)
+async def reabrir_programacion(
+    data: EventoReabrirRequest,
+    id_evento: int = Path(gt=0),
+    id_programacion: int = Path(gt=0),
+    actor: Usuario = Depends(
+        require_permission(MODULO_EVENTOS, PERMISO_REABRIR_PROGRAMACION)
+    ),
+    db: AsyncSession = Depends(get_db),
+) -> ProgramacionEventoResponse:
+    try:
+        return await EventoService(db).reabrir_programacion(
+            id_evento=id_evento,
+            id_programacion=id_programacion,
+            motivo=data.motivo,
+            actor=actor,
+        )
+    except EventoServiceError as exc:
+        _raise_http_error(exc)
+        raise
+
+
+@router.patch(
+    "/{id_evento}/programaciones/{id_programacion}/inactivar",
+    response_model=ProgramacionEventoResponse,
+)
+async def inactivar_programacion(
+    data: EventoInactivarRequest,
+    id_evento: int = Path(gt=0),
+    id_programacion: int = Path(gt=0),
+    actor: Usuario = Depends(
+        require_permission(MODULO_EVENTOS, PERMISO_CAMBIAR_ESTADO_PROGRAMACION)
+    ),
+    db: AsyncSession = Depends(get_db),
+) -> ProgramacionEventoResponse:
+    try:
+        return await EventoService(db).inactivar_programacion(
+            id_evento=id_evento,
+            id_programacion=id_programacion,
+            motivo=data.motivo,
+            actor=actor,
+        )
+    except EventoServiceError as exc:
+        _raise_http_error(exc)
+        raise
+
+
+@router.get(
+    "/{id_evento}/programaciones/{id_programacion}/dias",
+    response_model=list[DetalleProgramacionResponse],
+)
+async def listar_dias(
+    id_evento: int = Path(gt=0),
+    id_programacion: int = Path(gt=0),
+    actor: Usuario = Depends(require_permission(MODULO_EVENTOS, PERMISO_CONSULTAR)),
+    db: AsyncSession = Depends(get_db),
+) -> list[DetalleProgramacionResponse]:
+    try:
+        return await EventoService(db).listar_dias(
+            id_evento=id_evento, id_programacion=id_programacion
+        )
+    except EventoServiceError as exc:
+        _raise_http_error(exc)
+        raise
+
+
+@router.post(
+    "/{id_evento}/programaciones/{id_programacion}/dias",
+    response_model=DetalleProgramacionResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def crear_dia(
+    data: ProgramacionDiaCreate,
+    id_evento: int = Path(gt=0),
+    id_programacion: int = Path(gt=0),
+    actor: Usuario = Depends(require_permission(MODULO_EVENTOS, PERMISO_ACTUALIZAR)),
+    db: AsyncSession = Depends(get_db),
+) -> DetalleProgramacionResponse:
+    try:
+        return await EventoService(db).crear_dia(
+            id_evento=id_evento,
+            id_programacion=id_programacion,
+            data=data,
+            actor=actor,
+        )
+    except EventoServiceError as exc:
+        _raise_http_error(exc)
+        raise
+
+
+@router.patch(
+    "/{id_evento}/programaciones/{id_programacion}/dias/{id_dia}",
+    response_model=DetalleProgramacionResponse,
 )
 async def actualizar_dia(
     data: DetalleProgramacionUpdate,
     id_evento: int = Path(gt=0),
+    id_programacion: int = Path(gt=0),
     id_dia: int = Path(gt=0),
-    actor: Usuario = Depends(
-        require_permission(MODULO_EVENTOS, PERMISO_ACTUALIZAR)
-    ),
+    actor: Usuario = Depends(require_permission(MODULO_EVENTOS, PERMISO_ACTUALIZAR)),
     db: AsyncSession = Depends(get_db),
 ) -> DetalleProgramacionResponse:
     try:
         return await EventoService(db).actualizar_dia(
-            id_evento=id_evento, id_dia=id_dia, data=data, actor=actor
+            id_evento=id_evento,
+            id_programacion=id_programacion,
+            id_dia=id_dia,
+            data=data,
+            actor=actor,
+        )
+    except EventoServiceError as exc:
+        _raise_http_error(exc)
+        raise
+
+
+@router.delete(
+    "/{id_evento}/programaciones/{id_programacion}/dias/{id_dia}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def eliminar_dia(
+    id_evento: int = Path(gt=0),
+    id_programacion: int = Path(gt=0),
+    id_dia: int = Path(gt=0),
+    actor: Usuario = Depends(require_permission(MODULO_EVENTOS, PERMISO_ACTUALIZAR)),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    try:
+        await EventoService(db).eliminar_dia(
+            id_evento=id_evento,
+            id_programacion=id_programacion,
+            id_dia=id_dia,
+            actor=actor,
+        )
+    except EventoServiceError as exc:
+        _raise_http_error(exc)
+        raise
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post(
+    "/{id_evento}/programaciones/{id_programacion}/responsables",
+    response_model=ResponsableEventoResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def crear_responsable(
+    data: ResponsableEventoCreate,
+    id_evento: int = Path(gt=0),
+    id_programacion: int = Path(gt=0),
+    actor: Usuario = Depends(require_permission(MODULO_EVENTOS, PERMISO_ACTUALIZAR)),
+    db: AsyncSession = Depends(get_db),
+) -> ResponsableEventoResponse:
+    try:
+        return await EventoService(db).crear_responsable(
+            id_evento=id_evento,
+            id_programacion=id_programacion,
+            data=data,
+            actor=actor,
+        )
+    except EventoServiceError as exc:
+        _raise_http_error(exc)
+        raise
+
+
+@router.get(
+    "/{id_evento}/programaciones/{id_programacion}/responsables",
+    response_model=list[ResponsableEventoResponse],
+)
+async def listar_responsables(
+    id_evento: int = Path(gt=0),
+    id_programacion: int = Path(gt=0),
+    actor: Usuario = Depends(require_permission(MODULO_EVENTOS, PERMISO_CONSULTAR)),
+    db: AsyncSession = Depends(get_db),
+) -> list[ResponsableEventoResponse]:
+    try:
+        return await EventoService(db).listar_responsables(
+            id_evento=id_evento, id_programacion=id_programacion
+        )
+    except EventoServiceError as exc:
+        _raise_http_error(exc)
+        raise
+
+
+@router.patch(
+    "/{id_evento}/programaciones/{id_programacion}/responsables/{id_responsable}/estado",
+    response_model=ResponsableEventoResponse,
+)
+async def cambiar_estado_responsable(
+    estado: bool,
+    id_evento: int = Path(gt=0),
+    id_programacion: int = Path(gt=0),
+    id_responsable: int = Path(gt=0),
+    actor: Usuario = Depends(require_permission(MODULO_EVENTOS, PERMISO_ACTUALIZAR)),
+    db: AsyncSession = Depends(get_db),
+) -> ResponsableEventoResponse:
+    try:
+        return await EventoService(db).cambiar_estado_responsable(
+            id_evento=id_evento,
+            id_programacion=id_programacion,
+            id_responsable=id_responsable,
+            estado=estado,
+            actor=actor,
         )
     except EventoServiceError as exc:
         _raise_http_error(exc)
@@ -299,9 +613,7 @@ async def actualizar_dia(
 async def subir_flyer(
     id_evento: int = Path(gt=0),
     flyer: UploadFile = File(...),
-    actor: Usuario = Depends(
-        require_permission(MODULO_EVENTOS, PERMISO_ACTUALIZAR)
-    ),
+    actor: Usuario = Depends(require_permission(MODULO_EVENTOS, PERMISO_ACTUALIZAR)),
     db: AsyncSession = Depends(get_db),
 ) -> EventoResponse:
     try:
@@ -335,9 +647,7 @@ async def finalizar_evento(
 async def reabrir_evento(
     data: EventoReabrirRequest,
     id_evento: int = Path(gt=0),
-    actor: Usuario = Depends(
-        require_permission(MODULO_EVENTOS, PERMISO_REABRIR)
-    ),
+    actor: Usuario = Depends(require_permission(MODULO_EVENTOS, PERMISO_REABRIR)),
     db: AsyncSession = Depends(get_db),
 ) -> EventoResponse:
     try:
@@ -370,9 +680,7 @@ async def inactivar_evento(
 @router.delete("/{id_evento}", status_code=status.HTTP_204_NO_CONTENT)
 async def eliminar_evento(
     id_evento: int = Path(gt=0),
-    actor: Usuario = Depends(
-        require_permission(MODULO_EVENTOS, PERMISO_ELIMINAR)
-    ),
+    actor: Usuario = Depends(require_permission(MODULO_EVENTOS, PERMISO_ELIMINAR)),
     db: AsyncSession = Depends(get_db),
 ) -> Response:
     try:

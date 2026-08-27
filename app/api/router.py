@@ -9,6 +9,7 @@ from app.modules.factiliza.router import router as factiliza_router
 from app.modules.grupos.router import router as grupos_router
 from app.modules.maestros.router import router as maestros_router
 from app.modules.participantes.router import router as participantes_router
+from app.modules.portal.router import router as portal_router
 from app.modules.usuarios.auth_router import router as auth_router
 from app.modules.usuarios.router import router as usuarios_router
 
@@ -25,3 +26,4 @@ api_router.include_router(contactos_router)
 api_router.include_router(factiliza_router)
 api_router.include_router(maestros_router)
 api_router.include_router(participantes_router)
+api_router.include_router(portal_router)

@@ -62,10 +62,10 @@ async def test_bootstrap_rbac_es_idempotente(
         ) == 8
         assert await session.scalar(
             select(func.count()).select_from(Permiso)
-        ) == 27
+        ) == 30
         assert await session.scalar(
             select(func.count()).select_from(RolPermisoModulo)
-        ) == 48
+        ) == 53
         assert await session.scalar(
             select(func.count()).select_from(Usuario)
         ) == 1
@@ -76,7 +76,7 @@ async def test_bootstrap_rbac_es_idempotente(
             .join(Rol, Rol.id_rol == RolPermisoModulo.id_rol)
             .where(Rol.nombre_rol == "PERSONAL_EVENTOS")
         )
-        assert personal_permissions == 21
+        assert personal_permissions == 23
 
         personal_fusion_permission = await session.scalar(
             select(func.count())
@@ -92,6 +92,20 @@ async def test_bootstrap_rbac_es_idempotente(
         )
         assert personal_fusion_permission == 0
 
+        personal_gestionar_maestros = await session.scalar(
+            select(func.count())
+            .select_from(RolPermisoModulo)
+            .join(Rol, Rol.id_rol == RolPermisoModulo.id_rol)
+            .join(Permiso, Permiso.id_permiso == RolPermisoModulo.id_permiso)
+            .join(Modulo, Modulo.id_modulo == RolPermisoModulo.id_modulo)
+            .where(
+                Rol.nombre_rol == "PERSONAL_EVENTOS",
+                Modulo.nombre_modulo == "MAESTROS",
+                Permiso.codigo == "GESTIONAR_MAESTROS",
+            )
+        )
+        assert personal_gestionar_maestros == 1
+
         personal_admin_event_permissions = await session.scalar(
             select(func.count())
             .select_from(RolPermisoModulo)
@@ -101,7 +115,9 @@ async def test_bootstrap_rbac_es_idempotente(
             .where(
                 Rol.nombre_rol == "PERSONAL_EVENTOS",
                 Modulo.nombre_modulo == "EVENTOS",
-                Permiso.codigo.in_({"REABRIR_EVENTO", "ELIMINAR_EVENTO"}),
+                Permiso.codigo.in_(
+                    {"REABRIR_EVENTO", "ELIMINAR_EVENTO", "REABRIR_PROGRAMACION"}
+                ),
             )
         )
         assert personal_admin_event_permissions == 0

@@ -18,6 +18,7 @@ if str(ROOT) not in sys.path:
 from app.core import security  # noqa: E402
 from app.db.session import AsyncSessionLocal, engine  # noqa: E402
 from app.modules.categorias.models import Categoria  # noqa: E402
+from app.modules.maestros.models import Beneficio, TipoCalculoBeneficio  # noqa: E402
 from app.modules.usuarios.models import (  # noqa: E402
     Modulo,
     Permiso,
@@ -30,7 +31,7 @@ from app.modules.usuarios.models import (  # noqa: E402
 ROLE_ADMIN = "ADMINISTRADOR_EVENTOS"
 ROLE_USER = "PERSONAL_EVENTOS"
 MODULE_USUARIOS = "usuarios"
-PERMISSIONS_USUARIOS = ("CREAR_USUARIO", "INACTIVAR_USUARIO")
+PERMISSIONS_USUARIOS = ("CREAR_USUARIO", "INACTIVAR_USUARIO", "ACTUALIZAR_USUARIO")
 MODULO_GRUPOS = "GRUPOS"
 PERMISOS_GRUPOS = ("CREAR_GRUPO", "INACTIVAR_GRUPO")
 MODULO_CATEGORIAS = "CATEGORIAS"
@@ -58,6 +59,8 @@ PERMISOS_EVENTOS = (
     "REABRIR_EVENTO",
     "ELIMINAR_EVENTO",
     "EXPORTAR_EVENTO",
+    "CAMBIAR_ESTADO_PROGRAMACION",
+    "REABRIR_PROGRAMACION",
 )
 MODULO_PARTICIPANTES = "PARTICIPANTES"
 PERMISOS_PARTICIPANTES = (
@@ -68,6 +71,7 @@ PERMISOS_PARTICIPANTES = (
 TIPO_DOCUMENTO_DNI = "DNI"
 TIPO_DOCUMENTO_DNI_LONGITUD = 8
 CATEGORIA_SIN_CATEGORIA = "Sin categoría"
+BENEFICIO_SIN_BENEFICIO = "Sin beneficio"
 REQUIRED_TABLES = {
     "rol",
     "usuario",
@@ -86,7 +90,14 @@ REQUIRED_TABLES = {
     "detalle_programacion_evento",
     "lugar",
     "evento_empresa",
-    "participante",
+    "evento_contacto",
+    "beneficio",
+    "politica_evento",
+    "detalle_politica_evento",
+    "responsable_evento",
+    "asignacion_beneficio",
+    "participante_qr",
+    "codigo_acceso_principal",
 }
 
 
@@ -164,6 +175,29 @@ async def _get_or_create_categoria(nombre_categoria: str) -> Categoria:
             await session.commit()
             await session.refresh(categoria)
         return categoria
+
+
+async def _get_or_create_beneficio(nombre: str) -> Beneficio:
+    async with AsyncSessionLocal() as session:
+        beneficio = await session.scalar(
+            select(Beneficio).where(Beneficio.nombre == nombre)
+        )
+        if beneficio is None:
+            beneficio = Beneficio(
+                nombre=nombre,
+                condicion=None,
+                tipo_calculo=TipoCalculoBeneficio.SIN_BENEFICIO,
+                personas_por_asignacion=1,
+                estado=True,
+            )
+            session.add(beneficio)
+            await session.commit()
+            await session.refresh(beneficio)
+        elif not beneficio.estado:
+            beneficio.estado = True
+            await session.commit()
+            await session.refresh(beneficio)
+        return beneficio
 
 
 async def _get_or_create_module(nombre_modulo: str, *, descripcion: str) -> Modulo:
@@ -361,6 +395,7 @@ async def bootstrap(args: argparse.Namespace) -> None:
         TIPO_DOCUMENTO_DNI, longitud=TIPO_DOCUMENTO_DNI_LONGITUD
     )
     await _get_or_create_categoria(CATEGORIA_SIN_CATEGORIA)
+    await _get_or_create_beneficio(BENEFICIO_SIN_BENEFICIO)
     existing_admin = await _get_existing_admin_user(rol=admin_role)
 
     # Usuarios: crear/inactivar cuentas queda reservado al administrador.
@@ -387,17 +422,15 @@ async def bootstrap(args: argparse.Namespace) -> None:
                     permiso=permission,
                 )
 
-    # Maestros: ambos roles consultan catálogos; solo el administrador los gestiona.
+    # Maestros: operación diaria (cargos, áreas, beneficios), administrador y
+    # personal de eventos. Ninguna de estas facultades es exclusiva del
+    # administrador (esas son solo: crear usuarios, reabrir eventos, autorizar
+    # excepciones de cupo).
     for permission_name in PERMISOS_MAESTROS:
         permission = await _get_or_create_permission(permission_name)
-        await _ensure_role_permission(
-            rol=admin_role,
-            modulo=maestros_module,
-            permiso=permission,
-        )
-        if permission_name == "CONSULTAR_MAESTROS":
+        for rol in (admin_role, personal_role):
             await _ensure_role_permission(
-                rol=personal_role,
+                rol=rol,
                 modulo=maestros_module,
                 permiso=permission,
             )
@@ -427,7 +460,11 @@ async def bootstrap(args: argparse.Namespace) -> None:
             modulo=eventos_module,
             permiso=permission,
         )
-        if permission_name not in {"REABRIR_EVENTO", "ELIMINAR_EVENTO"}:
+        if permission_name not in {
+            "REABRIR_EVENTO",
+            "ELIMINAR_EVENTO",
+            "REABRIR_PROGRAMACION",
+        }:
                 await _ensure_role_permission(
                     rol=personal_role,
                     modulo=eventos_module,

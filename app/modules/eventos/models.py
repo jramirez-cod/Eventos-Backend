@@ -15,7 +15,6 @@ from sqlalchemy import (
     Text,
     Time,
     UniqueConstraint,
-    func,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -45,23 +44,54 @@ class Lugar(Base):
     estado: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
 
+class PoliticaEvento(Base):
+    __tablename__ = "politica_evento"
+
+    id_politica_evento: Mapped[int] = mapped_column(
+        BigInteger, primary_key=True, index=True
+    )
+    fecha_inicio: Mapped[date] = mapped_column(Date, nullable=False)
+    fecha_fin: Mapped[date] = mapped_column(Date, nullable=False)
+
+
+class DetallePoliticaEvento(Base):
+    __tablename__ = "detalle_politica_evento"
+
+    id_detalle_politica_evento: Mapped[int] = mapped_column(
+        BigInteger, primary_key=True, index=True
+    )
+    id_politica_evento: Mapped[int] = mapped_column(
+        ForeignKey("politica_evento.id_politica_evento", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    id_beneficio: Mapped[int] = mapped_column(
+        ForeignKey("beneficio.id_beneficio"), nullable=False, index=True
+    )
+    id_categoria: Mapped[int] = mapped_column(
+        ForeignKey("categoria.id_categoria"), nullable=False, index=True
+    )
+    entradas_gratuitas: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0
+    )
+
+
 class Evento(Base):
     __tablename__ = "evento"
     __table_args__ = (
-        CheckConstraint("aforo IS NULL OR aforo >= 0", name="ck_evento_aforo"),
-        CheckConstraint("fecha_fin >= fecha_inicio", name="ck_evento_fechas"),
         Index("ix_evento_nombre_evento", "nombre_evento"),
-        Index("ix_evento_fecha_inicio", "fecha_inicio"),
-        Index("ix_evento_fecha_fin", "fecha_fin"),
         Index("ix_evento_estado", "estado"),
     )
 
     id_evento: Mapped[int] = mapped_column(BigInteger, primary_key=True, index=True)
+    id_politica_evento: Mapped[int] = mapped_column(
+        ForeignKey("politica_evento.id_politica_evento"), nullable=False, index=True
+    )
+    id_area: Mapped[int] = mapped_column(
+        ForeignKey("area.id_area"), nullable=False, index=True
+    )
     nombre_evento: Mapped[str] = mapped_column(String(200), nullable=False)
     descripcion: Mapped[str | None] = mapped_column(Text)
-    fecha_inicio: Mapped[date] = mapped_column(Date, nullable=False)
-    fecha_fin: Mapped[date] = mapped_column(Date, nullable=False)
-    aforo: Mapped[int | None] = mapped_column(Integer)
     flyer_url: Mapped[str | None] = mapped_column(String(500))
     estado: Mapped[EventoEstado] = mapped_column(
         SAEnum(
@@ -72,25 +102,14 @@ class Evento(Base):
         nullable=False,
         default=EventoEstado.ABIERTO,
     )
-    creado_por: Mapped[int] = mapped_column(
-        ForeignKey("usuario.id_usuario"), nullable=False, index=True
-    )
-    creado_en: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now()
-    )
-    actualizado_en: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        nullable=False,
-        server_default=func.now(),
-        onupdate=func.now(),
-    )
 
 
 class ProgramacionEvento(Base):
     __tablename__ = "programacion_evento"
     __table_args__ = (
-        UniqueConstraint("id_evento", name="uq_programacion_evento_evento"),
         Index("ix_programacion_evento_modalidad", "modalidad"),
+        Index("ix_programacion_evento_evento", "id_evento"),
+        Index("ix_programacion_evento_estado", "estado"),
     )
 
     id_programacion_evento: Mapped[int] = mapped_column(
@@ -109,7 +128,15 @@ class ProgramacionEvento(Base):
         nullable=False,
     )
     enlace_general: Mapped[str | None] = mapped_column(String(500))
-    estado: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    estado: Mapped[EventoEstado] = mapped_column(
+        SAEnum(
+            EventoEstado,
+            name="programacion_estado_enum",
+            values_callable=lambda enum: [item.value for item in enum],
+        ),
+        nullable=False,
+        default=EventoEstado.ABIERTO,
+    )
 
 
 class DetalleProgramacionEvento(Base):
@@ -141,4 +168,30 @@ class DetalleProgramacionEvento(Base):
     hora_inicio: Mapped[time] = mapped_column(Time, nullable=False)
     hora_fin: Mapped[time | None] = mapped_column(Time)
     enlace: Mapped[str | None] = mapped_column(String(500))
+    estado: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+
+class ResponsableEvento(Base):
+    __tablename__ = "responsable_evento"
+    __table_args__ = (
+        UniqueConstraint(
+            "id_programacion_evento",
+            "id_usuario",
+            name="uq_responsable_evento_programacion_usuario",
+        ),
+    )
+
+    id_responsable_evento: Mapped[int] = mapped_column(
+        BigInteger, primary_key=True, index=True
+    )
+    id_programacion_evento: Mapped[int] = mapped_column(
+        ForeignKey(
+            "programacion_evento.id_programacion_evento", ondelete="CASCADE"
+        ),
+        nullable=False,
+        index=True,
+    )
+    id_usuario: Mapped[int] = mapped_column(
+        ForeignKey("usuario.id_usuario"), nullable=False, index=True
+    )
     estado: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)

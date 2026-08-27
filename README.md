@@ -282,26 +282,90 @@ nombre_rol
 
 Cada endpoint protegido usa `get_current_user()`, que valida en base de datos que el usuario todavía exista y siga activo. Si un usuario fue inactivado después de iniciar sesión, su JWT anterior queda rechazado.
 
-## Bootstrap de seguridad inicial
+## Bootstrap de seguridad inicial y modelo de roles/permisos (RBAC)
 
-HU-USR-004 requiere un usuario con permiso, por eso existe:
+`scripts/bootstrap_security.py` es el **único** lugar donde se define el
+modelado de negocio de acceso: roles, módulos, permisos y qué rol recibe cada
+permiso. Es idempotente (se puede correr las veces que sea, no duplica nada)
+y **no crea tablas ni modifica el esquema** — si faltan tablas requeridas se
+detiene con un error claro. Para el esquema, ver
+[Reinicio completo desde cero](#reinicio-completo-desde-cero) más abajo.
+
+### Roles
+
+Solo existen dos roles reales en el sistema:
 
 ```text
-scripts/bootstrap_security.py
+ADMINISTRADOR_EVENTOS
+PERSONAL_EVENTOS
 ```
 
-El script es idempotente y prepara:
+`PERSONAL_EVENTOS` tiene el mismo acceso operativo que el administrador en
+todos los módulos, **excepto** estas facultades, exclusivas del administrador:
 
 ```text
-roles básicos
-tipo de documento DNI (longitud 8)
-módulo USUARIOS
-permisos CREAR_USUARIO e INACTIVAR_USUARIO
-relaciones rol-permiso-módulo
-primer Administrador de Eventos
+CREAR_USUARIO            (crear cuentas internas)
+REABRIR_EVENTO            (reabrir un evento ya finalizado)
+ELIMINAR_EVENTO           (borrado físico de un evento)
+REABRIR_PROGRAMACION      (reabrir una programación ya finalizada)
 ```
 
-Ejemplo:
+Ninguna otra acción del sistema es exclusiva del administrador — todo lo demás
+(desactivar, crear, editar, afiliar, eliminar invitados, reenviar códigos,
+etc.) lo puede hacer también `PERSONAL_EVENTOS`.
+
+### Matriz completa de módulos y permisos
+
+| Módulo | Permisos | Administrador | Personal de Eventos |
+| --- | --- | --- | --- |
+| `usuarios` | `CREAR_USUARIO` | ✅ | ❌ |
+| | `ACTUALIZAR_USUARIO` | ✅ | ❌ |
+| | `INACTIVAR_USUARIO` | ✅ | ❌ |
+| `GRUPOS` | `CREAR_GRUPO`, `INACTIVAR_GRUPO` | ✅ | ✅ |
+| `CATEGORIAS` | `CREAR_CATEGORIA`, `INACTIVAR_CATEGORIA` | ✅ | ✅ |
+| `EMPRESAS` | `CREAR_EMPRESA`, `INACTIVAR_EMPRESA` | ✅ | ✅ |
+| `MAESTROS` | `CONSULTAR_MAESTROS`, `GESTIONAR_MAESTROS` | ✅ | ✅ |
+| `CONTACTOS` | `CREAR_CONTACTO` | ✅ | ✅ |
+| | `CONSULTAR_CONTACTO` | ✅ | ✅ |
+| | `ACTUALIZAR_CONTACTO` | ✅ | ✅ |
+| | `CAMBIAR_EMPRESA_CONTACTO` | ✅ | ✅ |
+| | `CAMBIAR_ESTADO_CONTACTO` | ✅ | ✅ |
+| | `EXPORTAR_CONTACTO` | ✅ | ✅ |
+| | `FUSIONAR_CONTACTO` | ✅ | ❌ (impacto en historial, reservado) |
+| `EVENTOS` | `CONSULTAR_EVENTO` | ✅ | ✅ |
+| | `CREAR_EVENTO` | ✅ | ✅ |
+| | `ACTUALIZAR_EVENTO` | ✅ | ✅ |
+| | `CAMBIAR_ESTADO_EVENTO` (finalizar/inactivar) | ✅ | ✅ |
+| | `EXPORTAR_EVENTO` | ✅ | ✅ |
+| | `CAMBIAR_ESTADO_PROGRAMACION` (finalizar/inactivar) | ✅ | ✅ |
+| | `REABRIR_EVENTO` | ✅ | ❌ |
+| | `ELIMINAR_EVENTO` | ✅ | ❌ |
+| | `REABRIR_PROGRAMACION` | ✅ | ❌ |
+| `PARTICIPANTES` | `CONSULTAR_PARTICIPANTE` | ✅ | ✅ |
+| | `CREAR_PARTICIPANTE` (agregar/eliminar invitados, cambiar estado, asignar beneficio, etc.) | ✅ | ✅ |
+| | `AFILIAR_EMPRESA_EVENTO` (afiliar empresa, contacto principal, enviar/reenviar código) | ✅ | ✅ |
+
+`MAESTROS/GESTIONAR_MAESTROS` cubre cargos, áreas y beneficios (crear,
+editar, cambiar estado — incluida la validación de "beneficio en uso").
+`PARTICIPANTES/CREAR_PARTICIPANTE` es un permiso amplio: cubre también el
+`DELETE` de invitados sin registrar, ya que es la misma operación de gestión
+de invitados que el resto del CRUD de participantes.
+
+### Datos de catálogo que siembra el script
+
+```text
+TipoDocumento "DNI" (longitud 8)
+Categoría "Sin categoría"     — id 1, primera en los selectores de categoría
+Beneficio "Sin beneficio"     — id 1, primera en el listado de beneficios
+1 usuario Administrador
+```
+
+`"Sin categoría"` y `"Sin beneficio"` existen para que los selectores de
+categoría/beneficio siempre tengan una opción neutra disponible incluso en
+una base recién creada, sin depender de que alguien cree manualmente la
+primera fila.
+
+### Ejecutar el bootstrap
 
 ```bash
 SECRET_KEY='coloca-un-secreto-largo-y-seguro' \
@@ -324,9 +388,42 @@ También se puede pasar parte de la información por argumentos:
   --apellidos Eventos
 ```
 
-En ese caso la contraseña se toma de `BOOTSTRAP_ADMIN_PASSWORD` o se solicita por entrada segura.
+En ese caso la contraseña se toma de `BOOTSTRAP_ADMIN_PASSWORD` o se solicita
+por entrada segura. Si ya existe un usuario con ese `id_rol` de administrador,
+el script no crea uno nuevo — reutiliza el existente y solo asegura que roles,
+módulos, permisos y catálogos base estén al día.
 
-Importante: el script no crea tablas ni modifica el esquema. Si faltan tablas requeridas, se detiene con un error claro.
+### Reinicio completo desde cero
+
+Para dejar la base exactamente como en una instalación nueva (borra
+absolutamente todo: eventos, empresas, contactos, participantes, auditoría,
+usuarios creados manualmente, todo):
+
+```bash
+# 1. Borrar todas las tablas del esquema actual
+#    (usar una sesión psql o un cliente conectado a la BD de PGDATABASE)
+psql -h $PGHOST -p $PGPORT -U $PGUSER -d $PGDATABASE \
+  -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
+
+# 2. Recrear las tablas a partir de los modelos SQLAlchemy actuales
+.venv/bin/python scripts/create_db.py
+
+# 3. Sembrar roles, permisos, catálogos base y el usuario administrador
+BOOTSTRAP_ADMIN_USERNAME='admin' \
+BOOTSTRAP_ADMIN_EMAIL='admin@codip.pe' \
+BOOTSTRAP_ADMIN_PASSWORD='AdminSeguro1!' \
+BOOTSTRAP_ADMIN_DOCUMENTO='00000000' \
+.venv/bin/python scripts/bootstrap_security.py
+```
+
+Después del paso 3 la base solo contiene lo listado en
+[Datos de catálogo que siembra el script](#datos-de-catálogo-que-siembra-el-script)
+— ningún evento, empresa, contacto ni participante de prueba. `create_db.py`
+es hoy la única fuente de verdad del esquema (no existe ya un `.sql` estático
+en el repositorio); `Base.metadata.create_all()` crea tablas faltantes, pero
+no reemplaza un sistema de migraciones ni corrige tablas ya existentes con
+columnas distintas — por eso el paso 1 (borrar todo el esquema) es necesario
+para partir de cero de verdad, no solo para vaciar filas.
 
 ## Probar endpoints desde Swagger
 
@@ -1517,7 +1614,7 @@ Si aparece un error similar a:
 sqlalchemy.exc.ProgrammingError: UndefinedColumn
 ```
 
-verifica que FastAPI esté conectado a la misma base creada con `SistemaEventosCODIP_postgresql.sql` y reinicia el servidor después de cambiar modelos o `.env`.
+verifica que la base apuntada por `.env` tenga el esquema al día con los modelos actuales (ver [Reinicio completo desde cero](#reinicio-completo-desde-cero)) y reinicia el servidor después de cambiar modelos o `.env`.
 
 ```bash
 # detener el servidor actual con Ctrl+C y volver a levantar

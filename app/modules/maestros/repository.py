@@ -1,7 +1,16 @@
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.maestros.models import Area, Cargo
+from app.modules.eventos.models import (
+    DetallePoliticaEvento,
+    Evento,
+    EventoEstado,
+    PoliticaEvento,
+)
+from app.modules.maestros.models import Area, Beneficio, Cargo, TipoCalculoBeneficio
+
+
+BENEFICIO_SIN_BENEFICIO = "Sin beneficio"
 
 
 class MaestroRepository:
@@ -136,3 +145,113 @@ class MaestroRepository:
         area.estado = estado
         await self.db.flush()
         return area
+
+    async def get_beneficio_by_id(self, id_beneficio: int) -> Beneficio | None:
+        return await self.db.get(Beneficio, id_beneficio)
+
+    async def get_beneficio_by_nombre(
+        self, nombre: str, *, exclude_id: int | None = None
+    ) -> Beneficio | None:
+        stmt = select(Beneficio).where(func.lower(Beneficio.nombre) == nombre.lower())
+        if exclude_id is not None:
+            stmt = stmt.where(Beneficio.id_beneficio != exclude_id)
+        return await self.db.scalar(stmt)
+
+    async def list_beneficios(
+        self,
+        *,
+        search: str | None,
+        estado: bool | None,
+        page: int,
+        page_size: int,
+    ) -> tuple[list[Beneficio], int]:
+        filters = []
+        if search:
+            filters.append(Beneficio.nombre.ilike(f"%{search.strip()}%"))
+        if estado is not None:
+            filters.append(Beneficio.estado.is_(estado))
+
+        total = int(
+            await self.db.scalar(
+                select(func.count()).select_from(Beneficio).where(*filters)
+            )
+            or 0
+        )
+        sin_beneficio_primero = case(
+            (Beneficio.nombre == BENEFICIO_SIN_BENEFICIO, 0),
+            else_=1,
+        )
+        stmt = (
+            select(Beneficio)
+            .where(*filters)
+            .order_by(sin_beneficio_primero, Beneficio.nombre, Beneficio.id_beneficio)
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )
+        return list((await self.db.scalars(stmt)).all()), total
+
+    async def create_beneficio(
+        self,
+        *,
+        nombre: str,
+        condicion: str | None,
+        tipo_calculo: TipoCalculoBeneficio,
+        personas_por_asignacion: int,
+    ) -> Beneficio:
+        beneficio = Beneficio(
+            nombre=nombre,
+            condicion=condicion,
+            tipo_calculo=tipo_calculo,
+            personas_por_asignacion=personas_por_asignacion,
+            estado=True,
+        )
+        self.db.add(beneficio)
+        await self.db.flush()
+        return beneficio
+
+    async def update_beneficio(
+        self,
+        beneficio: Beneficio,
+        *,
+        nombre: str,
+        condicion: str | None,
+        tipo_calculo: TipoCalculoBeneficio,
+        personas_por_asignacion: int,
+    ) -> Beneficio:
+        beneficio.nombre = nombre
+        beneficio.condicion = condicion
+        beneficio.tipo_calculo = tipo_calculo
+        beneficio.personas_por_asignacion = personas_por_asignacion
+        await self.db.flush()
+        return beneficio
+
+    async def set_beneficio_estado(
+        self, beneficio: Beneficio, *, estado: bool
+    ) -> Beneficio:
+        beneficio.estado = estado
+        await self.db.flush()
+        return beneficio
+
+    async def list_eventos_abiertos_usando_beneficio(
+        self, id_beneficio: int
+    ) -> list[Evento]:
+        stmt = (
+            select(Evento)
+            .join(
+                PoliticaEvento,
+                PoliticaEvento.id_politica_evento == Evento.id_politica_evento,
+            )
+            .join(
+                DetallePoliticaEvento,
+                DetallePoliticaEvento.id_politica_evento
+                == PoliticaEvento.id_politica_evento,
+            )
+            .where(
+                DetallePoliticaEvento.id_beneficio == id_beneficio,
+                Evento.estado == EventoEstado.ABIERTO,
+            )
+            .distinct()
+            .order_by(Evento.nombre_evento)
+        )
+        result = await self.db.execute(stmt)
+        return list(result.scalars().all())

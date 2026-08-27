@@ -13,6 +13,7 @@ from app.core.config import settings
 
 ACCESS_TOKEN_TYPE = "access"
 PASSWORD_CHANGE_TOKEN_TYPE = "password_change"
+PORTAL_ACCESS_TOKEN_TYPE = "portal_access"
 
 _password_hash = PasswordHash(
     (
@@ -191,3 +192,25 @@ def hash_initial_verification_code(*, token_id: str, code: str) -> str:
 
 def hash_recovery_code(*, correo: str, code: str) -> str:
     return hash_recovery_token(f"password_recovery:{correo.lower()}:{code}")
+
+
+def generate_portal_code() -> str:
+    return secrets.token_hex(4).upper()
+
+
+def hash_portal_code(codigo: str) -> str:
+    return hash_recovery_token(f"portal_access:{codigo.strip().upper()}")
+
+
+def create_portal_access_token(id_evento_empresa: int) -> str:
+    return _create_token(
+        subject=id_evento_empresa,
+        token_type=PORTAL_ACCESS_TOKEN_TYPE,
+        expires_delta=timedelta(
+            minutes=settings.portal_access_token_expire_minutes
+        ),
+    )
+
+
+def decode_portal_access_token(token: str) -> dict[str, Any]:
+    return decode_token(token, PORTAL_ACCESS_TOKEN_TYPE)

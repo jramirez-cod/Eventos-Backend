@@ -16,7 +16,7 @@ pytestmark = pytest.mark.asyncio
 async def test_finalizar_evento_y_auditoria(client, session_factory) -> None:
     async with session_factory() as session:
         _, headers = await seed_event_actor(session)
-    evento = await crear_evento_http(client, headers)
+    evento = await crear_evento_http(client, headers, session_factory)
     response = await client.patch(
         f"/api/v1/eventos/{evento['id_evento']}/finalizar",
         headers=headers,
@@ -35,7 +35,7 @@ async def test_finalizar_evento_y_auditoria(client, session_factory) -> None:
 async def test_finalizar_dos_veces_recibe_409(client, session_factory) -> None:
     async with session_factory() as session:
         _, headers = await seed_event_actor(session)
-    evento = await crear_evento_http(client, headers)
+    evento = await crear_evento_http(client, headers, session_factory)
     url = f"/api/v1/eventos/{evento['id_evento']}/finalizar"
     await client.patch(url, headers=headers, json={})
     response = await client.patch(url, headers=headers, json={})
@@ -45,7 +45,7 @@ async def test_finalizar_dos_veces_recibe_409(client, session_factory) -> None:
 async def test_reabrir_evento_con_permiso_y_motivo(client, session_factory) -> None:
     async with session_factory() as session:
         _, headers = await seed_event_actor(session)
-    evento = await crear_evento_http(client, headers)
+    evento = await crear_evento_http(client, headers, session_factory)
     await client.patch(
         f"/api/v1/eventos/{evento['id_evento']}/finalizar",
         headers=headers,
@@ -70,7 +70,7 @@ async def test_personal_sin_permiso_no_reabre(client, session_factory) -> None:
         _, headers = await seed_event_actor(
             session, permissions=personal_permissions
         )
-    evento = await crear_evento_http(client, headers)
+    evento = await crear_evento_http(client, headers, session_factory)
     await client.patch(
         f"/api/v1/eventos/{evento['id_evento']}/finalizar",
         headers=headers,
@@ -87,7 +87,7 @@ async def test_personal_sin_permiso_no_reabre(client, session_factory) -> None:
 async def test_reabrir_requiere_motivo(client, session_factory) -> None:
     async with session_factory() as session:
         _, headers = await seed_event_actor(session)
-    evento = await crear_evento_http(client, headers)
+    evento = await crear_evento_http(client, headers, session_factory)
     await client.patch(
         f"/api/v1/eventos/{evento['id_evento']}/finalizar",
         headers=headers,
@@ -107,7 +107,7 @@ async def test_inactivar_evento_desde_abierto_o_finalizado(
 ) -> None:
     async with session_factory() as session:
         _, headers = await seed_event_actor(session)
-    evento = await crear_evento_http(client, headers)
+    evento = await crear_evento_http(client, headers, session_factory)
     if finalizar_primero:
         await client.patch(
             f"/api/v1/eventos/{evento['id_evento']}/finalizar",
@@ -126,7 +126,7 @@ async def test_inactivar_evento_desde_abierto_o_finalizado(
 async def test_evento_inactivo_solo_permite_consulta(client, session_factory) -> None:
     async with session_factory() as session:
         _, headers = await seed_event_actor(session)
-    evento = await crear_evento_http(client, headers)
+    evento = await crear_evento_http(client, headers, session_factory)
     id_evento = evento["id_evento"]
     await client.patch(
         f"/api/v1/eventos/{id_evento}/inactivar", headers=headers, json={}
@@ -146,7 +146,7 @@ async def test_eliminar_evento_sin_participantes_es_fisico_y_audita(
 ) -> None:
     async with session_factory() as session:
         _, headers = await seed_event_actor(session)
-    evento = await crear_evento_http(client, headers)
+    evento = await crear_evento_http(client, headers, session_factory)
     id_evento = evento["id_evento"]
     response = await client.delete(f"/api/v1/eventos/{id_evento}", headers=headers)
     assert response.status_code == 204

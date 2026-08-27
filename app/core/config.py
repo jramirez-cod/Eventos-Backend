@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     app_host: str = "0.0.0.0"
     app_port: int = 8000
     app_debug: bool = False
+    frontend_base_url: str = "http://localhost:4200"
     cors_allowed_origins: str = (
         "http://localhost:4200,http://127.0.0.1:4200,"
         "http://localhost:8001,http://127.0.0.1:8001"
@@ -50,6 +51,7 @@ class Settings(BaseSettings):
     initial_password_code_length: int = 6
     temporary_dni_length: int = 8
     recovery_token_expire_minutes: int = 30
+    portal_access_token_expire_minutes: int = 60
     password_min_length: int = 8
     password_require_uppercase: bool = True
     password_require_lowercase: bool = True

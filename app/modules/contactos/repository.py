@@ -102,6 +102,29 @@ class ContactoRepository:
         await self.db.flush()
         return contacto
 
+    async def unset_contacto_principal(
+        self, *, id_empresa: int, exclude_id: int | None = None
+    ) -> None:
+        stmt = select(Contacto).where(
+            Contacto.id_empresa == id_empresa,
+            Contacto.es_contacto_principal.is_(True),
+        )
+        if exclude_id is not None:
+            stmt = stmt.where(Contacto.id_contacto != exclude_id)
+        otros = list((await self.db.scalars(stmt)).all())
+        for otro in otros:
+            otro.es_contacto_principal = False
+        if otros:
+            await self.db.flush()
+
+    async def get_contacto_principal(self, id_empresa: int) -> Contacto | None:
+        stmt = select(Contacto).where(
+            Contacto.id_empresa == id_empresa,
+            Contacto.es_contacto_principal.is_(True),
+            Contacto.estado.is_(True),
+        )
+        return await self.db.scalar(stmt)
+
     async def cambiar_empresa(
         self, contacto: Contacto, *, id_empresa: int
     ) -> Contacto:

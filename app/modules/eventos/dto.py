@@ -1,4 +1,4 @@
-from datetime import date, datetime, time
+from datetime import date, time
 from typing import Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -42,35 +42,67 @@ class LugarResponse(BaseModel):
     estado: bool
 
 
+class DetallePoliticaEventoCreate(BaseModel):
+    id_beneficio: int = Field(gt=0)
+    id_categoria: int = Field(gt=0)
+    entradas_gratuitas: int = Field(default=0, ge=0)
+
+
+class DetallePoliticaEventoResponse(BaseModel):
+    id_detalle_politica_evento: int
+    id_beneficio: int
+    nombre_beneficio: str
+    id_categoria: int
+    nombre_categoria: str
+    entradas_gratuitas: int
+
+
+class PoliticaEventoCreate(BaseModel):
+    fecha_inicio: date
+    fecha_fin: date
+    detalles: list[DetallePoliticaEventoCreate] = Field(min_length=1)
+
+    @field_validator("detalles")
+    @classmethod
+    def validar_categorias_unicas(
+        cls, value: list[DetallePoliticaEventoCreate]
+    ) -> list[DetallePoliticaEventoCreate]:
+        categorias = [detalle.id_categoria for detalle in value]
+        if len(categorias) != len(set(categorias)):
+            raise ValueError(
+                "Cada categoría solo puede tener un beneficio asignado en la política."
+            )
+        return value
+
+
+class PoliticaEventoResponse(BaseModel):
+    id_politica_evento: int
+    fecha_inicio: date
+    fecha_fin: date
+    detalles: list[DetallePoliticaEventoResponse]
+
+
 class EventoCreate(BaseModel):
     nombre_evento: str = Field(min_length=1, max_length=200)
     descripcion: str | None = None
-    fecha_inicio: date
-    fecha_fin: date
-    aforo: int | None = Field(default=None, ge=0)
-    modalidad: EventoModalidad
-    enlace_general: str | None = Field(default=None, max_length=500)
-    lugar: LugarCreate | None = None
-    hora_inicio: time
-    hora_fin: time | None = None
+    id_area: int = Field(gt=0)
+    politica: PoliticaEventoCreate
 
     @field_validator("nombre_evento", mode="before")
     @classmethod
     def limpiar_nombre(cls, value: object) -> object:
         return value.strip() if isinstance(value, str) else value
 
-    @field_validator("descripcion", "enlace_general", mode="before")
+    @field_validator("descripcion", mode="before")
     @classmethod
-    def limpiar_opcional(cls, value: object) -> object:
+    def limpiar_descripcion(cls, value: object) -> object:
         return _strip_optional(value)
 
 
 class EventoUpdate(BaseModel):
     nombre_evento: str | None = Field(default=None, min_length=1, max_length=200)
     descripcion: str | None = None
-    fecha_inicio: date | None = None
-    fecha_fin: date | None = None
-    aforo: int | None = Field(default=None, ge=0)
+    id_area: int | None = Field(default=None, gt=0)
 
     @field_validator("nombre_evento", mode="before")
     @classmethod
@@ -86,6 +118,86 @@ class EventoUpdate(BaseModel):
     def validar_contenido(self) -> Self:
         if not self.model_fields_set:
             raise ValueError("Debe enviar al menos un campo para actualizar.")
+        return self
+
+
+class PoliticaEventoUpdate(BaseModel):
+    fecha_inicio: date
+    fecha_fin: date
+    detalles: list[DetallePoliticaEventoCreate] = Field(min_length=1)
+
+    @field_validator("detalles")
+    @classmethod
+    def validar_categorias_unicas(
+        cls, value: list[DetallePoliticaEventoCreate]
+    ) -> list[DetallePoliticaEventoCreate]:
+        categorias = [detalle.id_categoria for detalle in value]
+        if len(categorias) != len(set(categorias)):
+            raise ValueError(
+                "Cada categoría solo puede tener un beneficio asignado en la política."
+            )
+        return value
+
+
+class ProgramacionDiaCreate(BaseModel):
+    fecha: date
+    hora_inicio: time
+    hora_fin: time | None = None
+    enlace: str | None = Field(default=None, max_length=500)
+
+    @field_validator("enlace", mode="before")
+    @classmethod
+    def limpiar_enlace(cls, value: object) -> object:
+        return _strip_optional(value)
+
+    @field_validator("fecha")
+    @classmethod
+    def validar_fecha_no_pasada(cls, value: date) -> date:
+        if value < date.today():
+            raise ValueError("La fecha no puede ser anterior al día de hoy.")
+        return value
+
+    @model_validator(mode="after")
+    def validar_horas(self) -> Self:
+        if self.hora_fin is not None and self.hora_fin <= self.hora_inicio:
+            raise ValueError("La hora final debe ser posterior a la hora inicial.")
+        return self
+
+
+class ProgramacionEventoCreate(BaseModel):
+    modalidad: EventoModalidad
+    enlace_general: str | None = Field(default=None, max_length=500)
+    lugar: LugarCreate | None = None
+    dias: list[ProgramacionDiaCreate] = Field(min_length=1)
+
+    @field_validator("enlace_general", mode="before")
+    @classmethod
+    def limpiar_enlace(cls, value: object) -> object:
+        return _strip_optional(value)
+
+    @field_validator("dias")
+    @classmethod
+    def validar_fechas_unicas(
+        cls, value: list[ProgramacionDiaCreate]
+    ) -> list[ProgramacionDiaCreate]:
+        fechas = [dia.fecha for dia in value]
+        if len(fechas) != len(set(fechas)):
+            raise ValueError("No se puede repetir la misma fecha en una programación.")
+        return value
+
+    @model_validator(mode="after")
+    def validar_lugar_requerido(self) -> Self:
+        if (
+            self.modalidad in (EventoModalidad.PRESENCIAL, EventoModalidad.HIBRIDO)
+            and self.lugar is None
+        ):
+            raise ValueError(
+                "Debe especificar un lugar para programaciones presenciales o híbridas."
+            )
+        if self.modalidad == EventoModalidad.VIRTUAL and self.lugar is not None:
+            raise ValueError(
+                "Las programaciones virtuales no admiten un lugar físico."
+            )
         return self
 
 
@@ -158,8 +270,29 @@ class ProgramacionEventoResponse(BaseModel):
     id_evento: int
     modalidad: EventoModalidad
     enlace_general: str | None
-    estado: bool
+    estado: EventoEstado
     lugar: LugarResponse | None
+    primera_fecha: date | None
+
+
+class ProgramacionEventoListResponse(BaseModel):
+    items: list[ProgramacionEventoResponse]
+    total: int
+    page: int
+    page_size: int
+    pages: int
+
+
+class ProgramacionEventoTransversalResponse(ProgramacionEventoResponse):
+    nombre_evento: str
+
+
+class ProgramacionEventoTransversalListResponse(BaseModel):
+    items: list[ProgramacionEventoTransversalResponse]
+    total: int
+    page: int
+    page_size: int
+    pages: int
 
 
 class DetalleProgramacionResponse(BaseModel):
@@ -174,19 +307,27 @@ class DetalleProgramacionResponse(BaseModel):
     estado: bool
 
 
+class ResponsableEventoCreate(BaseModel):
+    id_usuario: int = Field(gt=0)
+
+
+class ResponsableEventoResponse(BaseModel):
+    id_responsable_evento: int
+    id_programacion_evento: int
+    id_usuario: int
+    nombre_usuario: str
+    estado: bool
+
+
 class EventoResponse(BaseModel):
     id_evento: int
     nombre_evento: str
     descripcion: str | None
-    fecha_inicio: date
-    fecha_fin: date
-    aforo: int | None
+    id_area: int
+    nombre_area: str
     flyer_url: str | None
     estado: EventoEstado
-    creado_por: int
-    creado_en: datetime
-    actualizado_en: datetime
-    programacion: ProgramacionEventoResponse
+    politica: PoliticaEventoResponse
 
 
 class EventoListItem(EventoResponse):

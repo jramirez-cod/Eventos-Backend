@@ -8,6 +8,11 @@ from app.modules.maestros.dto import (
     AreaListResponse,
     AreaResponse,
     AreaUpdate,
+    BeneficioCreate,
+    BeneficioEstadoUpdate,
+    BeneficioListResponse,
+    BeneficioResponse,
+    BeneficioUpdate,
     CargoCreate,
     CargoEstadoUpdate,
     CargoListResponse,
@@ -16,8 +21,11 @@ from app.modules.maestros.dto import (
 )
 from app.modules.maestros.service import (
     AreaNotFoundError,
+    BeneficioEnUsoError,
+    BeneficioNotFoundError,
     CargoNotFoundError,
     DuplicateAreaNameError,
+    DuplicateBeneficioNameError,
     DuplicateCargoNameError,
     InvalidMaestroNameError,
     MaestroService,
@@ -35,12 +43,17 @@ router = APIRouter(prefix="/maestros", tags=["Maestros"])
 
 
 def _raise_http_error(exc: MaestroServiceError) -> None:
-    if isinstance(exc, (CargoNotFoundError, AreaNotFoundError)):
+    if isinstance(exc, (CargoNotFoundError, AreaNotFoundError, BeneficioNotFoundError)):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
-    if isinstance(exc, (DuplicateCargoNameError, DuplicateAreaNameError)):
+    if isinstance(
+        exc,
+        (DuplicateCargoNameError, DuplicateAreaNameError, DuplicateBeneficioNameError),
+    ):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
     if isinstance(exc, InvalidMaestroNameError):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    if isinstance(exc, BeneficioEnUsoError):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
     raise exc
 
 
@@ -233,6 +246,107 @@ async def cambiar_estado_area(
         return AreaResponse.model_validate(
             await MaestroService(db).cambiar_estado_area(
                 id_area=id_area,
+                estado=data.estado,
+                actor=actor,
+            )
+        )
+    except MaestroServiceError as exc:
+        _raise_http_error(exc)
+        raise
+
+
+@router.get("/beneficios", response_model=BeneficioListResponse)
+async def listar_beneficios(
+    search: str | None = Query(default=None, max_length=100),
+    estado: bool | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    actor: Usuario = Depends(
+        require_permission(MODULO_MAESTROS, PERMISO_CONSULTAR)
+    ),
+    db: AsyncSession = Depends(get_db),
+) -> BeneficioListResponse:
+    return await MaestroService(db).listar_beneficios(
+        search=search,
+        estado=estado,
+        page=page,
+        page_size=page_size,
+    )
+
+
+@router.get("/beneficios/{id_beneficio}", response_model=BeneficioResponse)
+async def obtener_beneficio(
+    id_beneficio: int,
+    actor: Usuario = Depends(
+        require_permission(MODULO_MAESTROS, PERMISO_CONSULTAR)
+    ),
+    db: AsyncSession = Depends(get_db),
+) -> BeneficioResponse:
+    try:
+        return BeneficioResponse.model_validate(
+            await MaestroService(db).obtener_beneficio(id_beneficio)
+        )
+    except MaestroServiceError as exc:
+        _raise_http_error(exc)
+        raise
+
+
+@router.post(
+    "/beneficios",
+    response_model=BeneficioResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def crear_beneficio(
+    data: BeneficioCreate,
+    actor: Usuario = Depends(
+        require_permission(MODULO_MAESTROS, PERMISO_GESTIONAR)
+    ),
+    db: AsyncSession = Depends(get_db),
+) -> BeneficioResponse:
+    try:
+        return BeneficioResponse.model_validate(
+            await MaestroService(db).crear_beneficio(data=data, actor=actor)
+        )
+    except MaestroServiceError as exc:
+        _raise_http_error(exc)
+        raise
+
+
+@router.put("/beneficios/{id_beneficio}", response_model=BeneficioResponse)
+async def actualizar_beneficio(
+    id_beneficio: int,
+    data: BeneficioUpdate,
+    actor: Usuario = Depends(
+        require_permission(MODULO_MAESTROS, PERMISO_GESTIONAR)
+    ),
+    db: AsyncSession = Depends(get_db),
+) -> BeneficioResponse:
+    try:
+        return BeneficioResponse.model_validate(
+            await MaestroService(db).actualizar_beneficio(
+                id_beneficio=id_beneficio,
+                data=data,
+                actor=actor,
+            )
+        )
+    except MaestroServiceError as exc:
+        _raise_http_error(exc)
+        raise
+
+
+@router.patch("/beneficios/{id_beneficio}/estado", response_model=BeneficioResponse)
+async def cambiar_estado_beneficio(
+    id_beneficio: int,
+    data: BeneficioEstadoUpdate,
+    actor: Usuario = Depends(
+        require_permission(MODULO_MAESTROS, PERMISO_GESTIONAR)
+    ),
+    db: AsyncSession = Depends(get_db),
+) -> BeneficioResponse:
+    try:
+        return BeneficioResponse.model_validate(
+            await MaestroService(db).cambiar_estado_beneficio(
+                id_beneficio=id_beneficio,
                 estado=data.estado,
                 actor=actor,
             )

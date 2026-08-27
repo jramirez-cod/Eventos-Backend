@@ -135,6 +135,15 @@ class UsuarioResponseDTO(BaseModel):
         return data
 
 
+class UsuarioUpdateDTO(BaseModel):
+    id_rol: int
+    id_tipo_documento: int
+    numero_documento: str = Field(min_length=1, max_length=50)
+    nombres: str = Field(min_length=1, max_length=150)
+    apellidos: str = Field(min_length=1, max_length=150)
+    correo: EmailStr
+
+
 class InactivarUsuarioDTO(BaseModel):
     motivo: str | None = Field(default=None, max_length=500)
 

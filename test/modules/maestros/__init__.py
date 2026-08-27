@@ -1,6 +1,6 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.maestros.models import Area, Cargo
+from app.modules.maestros.models import Area, Beneficio, Cargo
 from app.modules.usuarios.models import Usuario
 from test.modules.usuarios.conftest import (
     auth_header,
@@ -60,9 +60,23 @@ async def create_area(
     return area
 
 
+async def create_beneficio(
+    session: AsyncSession,
+    *,
+    nombre: str,
+    condicion: str | None = None,
+    estado: bool = True,
+) -> Beneficio:
+    beneficio = Beneficio(nombre=nombre, condicion=condicion, estado=estado)
+    session.add(beneficio)
+    await session.flush()
+    return beneficio
+
+
 __all__ = [
     "MAESTRO_PERMISSIONS",
     "create_area",
+    "create_beneficio",
     "create_cargo",
     "seed_maestro_actor",
 ]

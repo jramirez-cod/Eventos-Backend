@@ -24,7 +24,7 @@ async def test_adjuntar_flyer_valido(
 ) -> None:
     async with session_factory() as session:
         _, headers = await seed_event_actor(session)
-    evento = await crear_evento_http(client, headers)
+    evento = await crear_evento_http(client, headers, session_factory)
     response = await client.put(
         f"/api/v1/eventos/{evento['id_evento']}/flyer",
         headers=headers,
@@ -39,7 +39,7 @@ async def test_adjuntar_flyer_valido(
 async def test_archivo_no_permitido_es_rechazado(client, session_factory) -> None:
     async with session_factory() as session:
         _, headers = await seed_event_actor(session)
-    evento = await crear_evento_http(client, headers)
+    evento = await crear_evento_http(client, headers, session_factory)
     response = await client.put(
         f"/api/v1/eventos/{evento['id_evento']}/flyer",
         headers=headers,
@@ -51,7 +51,7 @@ async def test_archivo_no_permitido_es_rechazado(client, session_factory) -> Non
 async def test_mime_no_coincidente_es_rechazado(client, session_factory) -> None:
     async with session_factory() as session:
         _, headers = await seed_event_actor(session)
-    evento = await crear_evento_http(client, headers)
+    evento = await crear_evento_http(client, headers, session_factory)
     response = await client.put(
         f"/api/v1/eventos/{evento['id_evento']}/flyer",
         headers=headers,
@@ -65,7 +65,7 @@ async def test_reemplazar_flyer_elimina_anterior_y_audita(
 ) -> None:
     async with session_factory() as session:
         _, headers = await seed_event_actor(session)
-    evento = await crear_evento_http(client, headers)
+    evento = await crear_evento_http(client, headers, session_factory)
     url = f"/api/v1/eventos/{evento['id_evento']}/flyer"
     first = await client.put(
         url,
@@ -108,7 +108,7 @@ async def test_reemplazar_flyer_elimina_anterior_y_audita(
 async def test_descargar_flyer_requiere_permiso(client, session_factory) -> None:
     async with session_factory() as session:
         _, headers = await seed_event_actor(session)
-    evento = await crear_evento_http(client, headers)
+    evento = await crear_evento_http(client, headers, session_factory)
     upload = await client.put(
         f"/api/v1/eventos/{evento['id_evento']}/flyer",
         headers=headers,

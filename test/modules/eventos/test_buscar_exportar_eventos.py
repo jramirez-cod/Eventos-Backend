@@ -19,19 +19,18 @@ async def _seed_eventos(client, session_factory):
     first = await crear_evento_http(
         client,
         headers,
+        session_factory,
         nombre_evento="Congreso Comercial",
-        fecha_inicio=future_date(5),
-        fecha_fin=future_date(7),
-        modalidad="PRESENCIAL",
+        politica_fecha_inicio=future_date(5),
+        politica_fecha_fin=future_date(7),
     )
     second = await crear_evento_http(
         client,
         headers,
+        session_factory,
         nombre_evento="Foro Virtual",
-        fecha_inicio=future_date(10),
-        fecha_fin=future_date(12),
-        modalidad="VIRTUAL",
-        lugar=None,
+        politica_fecha_inicio=future_date(10),
+        politica_fecha_fin=future_date(12),
     )
     await client.patch(
         f"/api/v1/eventos/{second['id_evento']}/finalizar",
@@ -60,16 +59,29 @@ async def test_listar_buscar_y_paginar(client, session_factory) -> None:
     assert len(page.json()["items"]) == 1
 
 
-async def test_filtros_estado_y_modalidad(client, session_factory) -> None:
+async def test_filtro_estado(client, session_factory) -> None:
     headers, _, second = await _seed_eventos(client, session_factory)
     response = await client.get(
         "/api/v1/eventos",
         headers=headers,
-        params={"estado": "FINALIZADO", "modalidad": "VIRTUAL"},
+        params={"estado": "FINALIZADO"},
     )
     assert response.status_code == 200
     assert response.json()["total"] == 1
     assert response.json()["items"][0]["id_evento"] == second["id_evento"]
+
+
+async def test_filtro_area(client, session_factory) -> None:
+    headers, first, second = await _seed_eventos(client, session_factory)
+    response = await client.get(
+        "/api/v1/eventos",
+        headers=headers,
+        params={"id_area": first["id_area"]},
+    )
+    assert response.status_code == 200
+    ids = {item["id_evento"] for item in response.json()["items"]}
+    assert first["id_evento"] in ids
+    assert second["id_evento"] not in ids
 
 
 async def test_filtro_fecha_utiliza_solapamiento(client, session_factory) -> None:
@@ -120,11 +132,9 @@ async def test_exportar_xlsx_respeta_filtros_y_columnas(
         "ID",
         "Nombre",
         "Descripción",
-        "Fecha inicio",
-        "Fecha fin",
-        "Modalidad",
-        "Lugar",
-        "Aforo",
+        "Área",
+        "Política: Fecha inicio",
+        "Política: Fecha fin",
         "Estado",
     )
     assert len(rows) == 2

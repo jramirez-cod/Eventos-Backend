@@ -9,12 +9,16 @@ from app.modules.maestros.dto import (
     AreaListResponse,
     AreaResponse,
     AreaUpdate,
+    BeneficioCreate,
+    BeneficioListResponse,
+    BeneficioResponse,
+    BeneficioUpdate,
     CargoCreate,
     CargoListResponse,
     CargoResponse,
     CargoUpdate,
 )
-from app.modules.maestros.models import Area, Cargo
+from app.modules.maestros.models import Area, Beneficio, Cargo
 from app.modules.maestros.repository import MaestroRepository
 from app.modules.usuarios.models import Usuario
 from app.modules.usuarios.repository import UsuarioRepository
@@ -45,6 +49,23 @@ class DuplicateAreaNameError(MaestroServiceError):
 
 class InvalidMaestroNameError(MaestroServiceError):
     pass
+
+
+class BeneficioNotFoundError(MaestroServiceError):
+    pass
+
+
+class DuplicateBeneficioNameError(MaestroServiceError):
+    pass
+
+
+class BeneficioEnUsoError(MaestroServiceError):
+    def __init__(self, *, nombres_eventos: list[str]) -> None:
+        self.nombres_eventos = nombres_eventos
+        super().__init__(
+            "El beneficio está en la política de eventos abiertos: "
+            + ", ".join(nombres_eventos)
+        )
 
 
 class MaestroService:
@@ -291,6 +312,147 @@ class MaestroService:
             await self.db.rollback()
             raise
 
+    async def crear_beneficio(
+        self, *, data: BeneficioCreate, actor: Usuario
+    ) -> Beneficio:
+        nombre = self._normalize_name(data.nombre, entidad="beneficio")
+        condicion = self._normalize_description(data.condicion)
+        if await self.maestros.get_beneficio_by_nombre(nombre):
+            raise DuplicateBeneficioNameError("El nombre del beneficio ya existe.")
+
+        try:
+            beneficio = await self.maestros.create_beneficio(
+                nombre=nombre,
+                condicion=condicion,
+                tipo_calculo=data.tipo_calculo,
+                personas_por_asignacion=data.personas_por_asignacion,
+            )
+            await self.auditoria.create(
+                id_usuario=actor.id_usuario,
+                id_modulo=await self._id_modulo(),
+                entidad="beneficio",
+                id_entidad=beneficio.id_beneficio,
+                accion="CREAR_BENEFICIO",
+                valor_nuevo=self._beneficio_values(beneficio),
+            )
+            await self.db.commit()
+            await self.db.refresh(beneficio)
+            return beneficio
+        except IntegrityError as exc:
+            await self.db.rollback()
+            raise DuplicateBeneficioNameError(
+                "El nombre del beneficio ya existe."
+            ) from exc
+        except Exception:
+            await self.db.rollback()
+            raise
+
+    async def obtener_beneficio(self, id_beneficio: int) -> Beneficio:
+        beneficio = await self.maestros.get_beneficio_by_id(id_beneficio)
+        if beneficio is None:
+            raise BeneficioNotFoundError("Beneficio no encontrado.")
+        return beneficio
+
+    async def listar_beneficios(
+        self,
+        *,
+        search: str | None,
+        estado: bool | None,
+        page: int,
+        page_size: int,
+    ) -> BeneficioListResponse:
+        beneficios, total = await self.maestros.list_beneficios(
+            search=search,
+            estado=estado,
+            page=page,
+            page_size=page_size,
+        )
+        return BeneficioListResponse(
+            items=[
+                BeneficioResponse.model_validate(beneficio)
+                for beneficio in beneficios
+            ],
+            total=total,
+            page=page,
+            page_size=page_size,
+            pages=math.ceil(total / page_size) if total else 0,
+        )
+
+    async def actualizar_beneficio(
+        self, *, id_beneficio: int, data: BeneficioUpdate, actor: Usuario
+    ) -> Beneficio:
+        beneficio = await self.obtener_beneficio(id_beneficio)
+        nombre = self._normalize_name(data.nombre, entidad="beneficio")
+        condicion = self._normalize_description(data.condicion)
+        if await self.maestros.get_beneficio_by_nombre(
+            nombre, exclude_id=id_beneficio
+        ):
+            raise DuplicateBeneficioNameError("El nombre del beneficio ya existe.")
+
+        anterior = self._beneficio_values(beneficio)
+        try:
+            await self.maestros.update_beneficio(
+                beneficio,
+                nombre=nombre,
+                condicion=condicion,
+                tipo_calculo=data.tipo_calculo,
+                personas_por_asignacion=data.personas_por_asignacion,
+            )
+            await self.auditoria.create(
+                id_usuario=actor.id_usuario,
+                id_modulo=await self._id_modulo(),
+                entidad="beneficio",
+                id_entidad=beneficio.id_beneficio,
+                accion="ACTUALIZAR_BENEFICIO",
+                valor_anterior=anterior,
+                valor_nuevo=self._beneficio_values(beneficio),
+            )
+            await self.db.commit()
+            await self.db.refresh(beneficio)
+            return beneficio
+        except IntegrityError as exc:
+            await self.db.rollback()
+            raise DuplicateBeneficioNameError(
+                "El nombre del beneficio ya existe."
+            ) from exc
+        except Exception:
+            await self.db.rollback()
+            raise
+
+    async def cambiar_estado_beneficio(
+        self, *, id_beneficio: int, estado: bool, actor: Usuario
+    ) -> Beneficio:
+        beneficio = await self.obtener_beneficio(id_beneficio)
+
+        if not estado:
+            eventos = await self.maestros.list_eventos_abiertos_usando_beneficio(
+                id_beneficio
+            )
+            if eventos:
+                raise BeneficioEnUsoError(
+                    nombres_eventos=[evento.nombre_evento for evento in eventos]
+                )
+
+        anterior = self._beneficio_values(beneficio)
+        accion = "REACTIVAR_BENEFICIO" if estado else "INACTIVAR_BENEFICIO"
+        try:
+            await self.maestros.set_beneficio_estado(beneficio, estado=estado)
+            await self.auditoria.create(
+                id_usuario=actor.id_usuario,
+                id_modulo=await self._id_modulo(),
+                entidad="beneficio",
+                id_entidad=beneficio.id_beneficio,
+                accion=accion,
+                valor_anterior=anterior,
+                valor_nuevo=self._beneficio_values(beneficio),
+            )
+            await self.db.commit()
+            await self.db.refresh(beneficio)
+            return beneficio
+        except Exception:
+            await self.db.rollback()
+            raise
+
     async def _id_modulo(self) -> int | None:
         modulo = await self.usuarios.get_module_by_name(MODULO_MAESTROS)
         return modulo.id_modulo if modulo else None
@@ -326,4 +488,15 @@ class MaestroService:
             "nombre_area": area.nombre_area,
             "descripcion": area.descripcion,
             "estado": area.estado,
+        }
+
+    @staticmethod
+    def _beneficio_values(beneficio: Beneficio) -> dict[str, object]:
+        return {
+            "id_beneficio": beneficio.id_beneficio,
+            "nombre": beneficio.nombre,
+            "condicion": beneficio.condicion,
+            "tipo_calculo": beneficio.tipo_calculo.value,
+            "personas_por_asignacion": beneficio.personas_por_asignacion,
+            "estado": beneficio.estado,
         }

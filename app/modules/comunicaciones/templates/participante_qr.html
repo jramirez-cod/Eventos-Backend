@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Tu código de ingreso</title>
+  </head>
+  <body style="margin:0;background:#f3f5f7;font-family:Arial,sans-serif;color:#202124">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="padding:32px 12px">
+      <tr>
+        <td align="center">
+          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:600px;background:#ffffff;border:1px solid #dfe3e8">
+            <tr>
+              <td style="padding:24px 32px;background:#17365d;color:#ffffff">
+                <div style="font-size:22px;font-weight:700">Sistema Eventos CODIP</div>
+                <div style="margin-top:6px;font-size:14px">Código de ingreso al evento</div>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:32px">
+                <p style="margin:0 0 18px">Hola, {{ recipient_name }}:</p>
+                <p style="margin:0 0 22px;line-height:1.6">
+                  Este es tu código de acceso. Preséntalo (impreso o desde tu
+                  celular) en la entrada del evento para que puedan escanearlo.
+                </p>
+                <div style="padding:20px;text-align:center;background:#eef2f6;border:1px solid #d7dee7">
+                  <img src="cid:qr_image" alt="Código QR de ingreso" width="220" height="220" style="display:block;margin:0 auto">
+                </div>
+                <p style="margin:22px 0 0;line-height:1.6;color:#555">
+                  Si no esperabas este correo, comunícate con el organizador del
+                  evento.
+                </p>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:18px 32px;background:#f7f8fa;color:#68707a;font-size:12px;line-height:1.5">
+                Mensaje automático del Sistema Eventos CODIP. No respondas a este correo.
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>

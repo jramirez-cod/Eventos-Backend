@@ -105,6 +105,26 @@ class UsuarioRepository:
         await self.db.refresh(usuario)
         return usuario
 
+    async def update_user(
+        self,
+        usuario: Usuario,
+        *,
+        id_rol: int,
+        id_tipo_documento: int,
+        numero_documento: str,
+        nombres: str,
+        apellidos: str,
+        correo: str,
+    ) -> Usuario:
+        usuario.id_rol = id_rol
+        usuario.id_tipo_documento = id_tipo_documento
+        usuario.numero_documento = numero_documento
+        usuario.nombres = nombres
+        usuario.apellidos = apellidos
+        usuario.correo = correo
+        await self.db.flush()
+        return usuario
+
     async def update_password(self, usuario: Usuario, password_hash: str) -> Usuario:
         usuario.password_hash = password_hash
         await self.db.flush()

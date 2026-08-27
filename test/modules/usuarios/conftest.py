@@ -239,6 +239,9 @@ async def seed_admin_with_permissions(session: AsyncSession) -> tuple[Rol, Usuar
     await grant_permission(
         session, admin_role, permiso_nombre="INACTIVAR_USUARIO", modulo_nombre="USUARIOS"
     )
+    await grant_permission(
+        session, admin_role, permiso_nombre="ACTUALIZAR_USUARIO", modulo_nombre="USUARIOS"
+    )
     admin = await create_user(
         session,
         admin_role,

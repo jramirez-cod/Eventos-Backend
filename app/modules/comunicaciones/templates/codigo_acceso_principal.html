@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Código de acceso</title>
+  </head>
+  <body style="margin:0;background:#f3f5f7;font-family:Arial,sans-serif;color:#202124">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="padding:32px 12px">
+      <tr>
+        <td align="center">
+          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:600px;background:#ffffff;border:1px solid #dfe3e8">
+            <tr>
+              <td style="padding:24px 32px;background:#17365d;color:#ffffff">
+                <div style="font-size:22px;font-weight:700">Sistema Eventos CODIP</div>
+                <div style="margin-top:6px;font-size:14px">Gestión de participantes de {{ nombre_empresa }}</div>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:32px">
+                <p style="margin:0 0 18px">Hola, {{ recipient_name }}:</p>
+                <p style="margin:0 0 22px;line-height:1.6">
+                  Como contacto principal de <strong>{{ nombre_empresa }}</strong>, puedes
+                  elegir e inscribir a los participantes que asistirán. Usa el
+                  siguiente código de acceso:
+                </p>
+                <div style="padding:20px;text-align:center;background:#eef2f6;border:1px solid #d7dee7;font-size:28px;font-weight:700;letter-spacing:6px;color:#17365d">
+                  {{ codigo }}
+                </div>
+                <p style="margin:22px 0;text-align:center">
+                  <a href="{{ portal_url }}" style="display:inline-block;padding:12px 24px;background:#f7911d;color:#ffffff;text-decoration:none;border-radius:6px;font-weight:700">Ir al portal</a>
+                </p>
+                <p style="margin:22px 0 0;line-height:1.6;color:#555">
+                  Puedes volver a ingresar con este mismo código las veces que
+                  necesites hasta el día antes del evento. Si no esperabas este
+                  correo, comunícate con el organizador del evento.
+                </p>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:18px 32px;background:#f7f8fa;color:#68707a;font-size:12px;line-height:1.5">
+                Mensaje automático del Sistema Eventos CODIP. No respondas a este correo.
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>

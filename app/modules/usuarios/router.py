@@ -9,6 +9,7 @@ from app.modules.usuarios.dto import (
     TipoDocumentoResponseDTO,
     UsuarioCreateDTO,
     UsuarioResponseDTO,
+    UsuarioUpdateDTO,
 )
 from app.modules.usuarios.models import Rol, TipoDocumento, Usuario
 from app.modules.usuarios.repository import UsuarioRepository
@@ -26,6 +27,7 @@ from app.modules.usuarios.usuario_service import (
 MODULO_USUARIOS = "USUARIOS"
 PERMISO_CREAR_USUARIO = "CREAR_USUARIO"
 PERMISO_INACTIVAR_USUARIO = "INACTIVAR_USUARIO"
+PERMISO_ACTUALIZAR_USUARIO = "ACTUALIZAR_USUARIO"
 
 router = APIRouter(prefix="/usuarios", tags=["Usuarios"])
 
@@ -52,6 +54,41 @@ async def listar_usuarios(
     db: AsyncSession = Depends(get_db),
 ) -> list[Usuario]:
     return await UsuarioRepository(db).list_all()
+
+
+@router.get("/{id_usuario}", response_model=UsuarioResponseDTO)
+async def obtener_usuario(
+    id_usuario: int,
+    actor: Usuario = Depends(require_permission(MODULO_USUARIOS, PERMISO_CREAR_USUARIO)),
+    db: AsyncSession = Depends(get_db),
+) -> Usuario:
+    try:
+        return await UsuarioService(db).obtener_usuario(id_usuario)
+    except UsuarioNotFoundError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Usuario no encontrado.")
+
+
+@router.patch("/{id_usuario}", response_model=UsuarioResponseDTO)
+async def actualizar_usuario(
+    id_usuario: int,
+    data: UsuarioUpdateDTO,
+    actor: Usuario = Depends(require_permission(MODULO_USUARIOS, PERMISO_ACTUALIZAR_USUARIO)),
+    db: AsyncSession = Depends(get_db),
+) -> Usuario:
+    try:
+        return await UsuarioService(db).actualizar_usuario(id_usuario=id_usuario, data=data, actor=actor)
+    except UsuarioNotFoundError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Usuario no encontrado.")
+    except RolNotFoundError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Rol no encontrado.")
+    except TipoDocumentoNotFoundError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tipo de documento no encontrado.")
+    except DuplicateEmailError:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Correo ya existe.")
+    except DuplicateDocumentoError:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Número de documento ya existe.")
+    except PasswordPolicyViolationError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=exc.errors)
 
 
 @router.post("", response_model=UsuarioResponseDTO, status_code=status.HTTP_201_CREATED)

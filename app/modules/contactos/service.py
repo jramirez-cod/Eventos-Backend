@@ -120,6 +120,10 @@ class ContactoService:
         celular = normalize_phone(data.celular)
 
         try:
+            if data.es_contacto_principal:
+                await self.contactos.unset_contacto_principal(
+                    id_empresa=data.id_empresa
+                )
             contacto = await self.contactos.create(
                 id_empresa=data.id_empresa,
                 id_cargo=data.id_cargo,
@@ -181,6 +185,10 @@ class ContactoService:
         }
 
         try:
+            if values.get("es_contacto_principal") is True:
+                await self.contactos.unset_contacto_principal(
+                    id_empresa=contacto.id_empresa, exclude_id=contacto.id_contacto
+                )
             await self.contactos.update(contacto, values)
             await self.auditoria.create(
                 id_usuario=actor.id_usuario,
