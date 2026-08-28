@@ -203,18 +203,26 @@ class ParticipanteService:
     ) -> EventoEmpresaResponse:
         await self._get_open_programacion(id_programacion_evento)
         await self._get_active_company(id_empresa)
-        if await self.participantes.get_evento_empresa(
+        existente = await self.participantes.get_evento_empresa(
             id_programacion_evento=id_programacion_evento, id_empresa=id_empresa
-        ):
+        )
+        if existente is not None and existente.estado:
             raise DuplicateEventoEmpresaError(
                 "La empresa ya está afiliada a esta programación."
             )
 
         try:
-            evento_empresa = await self.participantes.create_evento_empresa(
-                id_programacion_evento=id_programacion_evento,
-                id_empresa=id_empresa,
-            )
+            if existente is not None:
+                evento_empresa = await self.participantes.set_evento_empresa_estado(
+                    existente, estado=True
+                )
+                accion = "REAFILIAR_EMPRESA_EVENTO"
+            else:
+                evento_empresa = await self.participantes.create_evento_empresa(
+                    id_programacion_evento=id_programacion_evento,
+                    id_empresa=id_empresa,
+                )
+                accion = "AFILIAR_EMPRESA_EVENTO"
             contacto_principal = await self.contactos.contactos.get_contacto_principal(
                 id_empresa
             )
@@ -227,7 +235,7 @@ class ParticipanteService:
                 id_modulo=await self._id_modulo(),
                 entidad="evento_empresa",
                 id_entidad=evento_empresa.id_evento_empresa,
-                accion="AFILIAR_EMPRESA_EVENTO",
+                accion=accion,
                 valor_nuevo=self._evento_empresa_values(evento_empresa),
             )
             await self.db.commit()
@@ -243,6 +251,51 @@ class ParticipanteService:
         return await self._get_evento_empresa_response(
             evento_empresa.id_evento_empresa
         )
+
+    async def desafiliar_empresa(
+        self, *, id_evento_empresa: int, motivo: str | None, actor: Usuario
+    ) -> None:
+        evento_empresa = await self.participantes.get_evento_empresa_by_id(
+            id_evento_empresa, for_update=True
+        )
+        if evento_empresa is None:
+            raise EventoEmpresaNotFoundError("Afiliación no encontrada.")
+        await self._get_open_programacion(evento_empresa.id_programacion_evento)
+
+        anterior = self._evento_empresa_values(evento_empresa)
+        try:
+            await self.participantes.invalidar_codigos(id_evento_empresa)
+            contactos = await self.participantes.list_evento_contactos_activos_por_empresa(
+                id_programacion_evento=evento_empresa.id_programacion_evento,
+                id_empresa=evento_empresa.id_empresa,
+            )
+            for contacto in contactos:
+                await self.participantes.update_evento_contacto(
+                    contacto, {"estado": False}
+                )
+                qr = await self.participantes.get_participante_qr_by_evento_contacto(
+                    contacto.id_evento_contacto
+                )
+                if qr is not None:
+                    qr.estado = False
+                    await self.db.flush()
+            await self.participantes.set_evento_empresa_estado(
+                evento_empresa, estado=False
+            )
+            await self.auditoria.create(
+                id_usuario=actor.id_usuario,
+                id_modulo=await self._id_modulo(),
+                entidad="evento_empresa",
+                id_entidad=id_evento_empresa,
+                accion="DESAFILIAR_EMPRESA_EVENTO",
+                valor_anterior=anterior,
+                valor_nuevo=self._evento_empresa_values(evento_empresa),
+                motivo=motivo,
+            )
+            await self.db.commit()
+        except Exception:
+            await self.db.rollback()
+            raise
 
     async def listar_empresas_programacion(
         self, id_programacion_evento: int

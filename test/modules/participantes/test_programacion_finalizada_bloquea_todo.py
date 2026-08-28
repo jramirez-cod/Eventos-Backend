@@ -100,6 +100,10 @@ async def test_programacion_finalizada_bloquea_todas_las_acciones(
         headers=headers,
         json={},
     )))
+    checks.append(("desafiliar-empresa", await client.delete(
+        f"/api/v1/participantes/empresas/{id_evento_empresa}",
+        headers=headers,
+    )))
     checks.append(("eliminar-invitado", await client.delete(
         f"/api/v1/participantes/evento-contactos/{id_ec}",
         headers=headers,

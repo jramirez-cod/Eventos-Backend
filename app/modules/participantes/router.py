@@ -183,6 +183,29 @@ async def listar_empresas_programacion(
         raise
 
 
+@router.delete(
+    "/empresas/{id_evento_empresa}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def desafiliar_empresa(
+    id_evento_empresa: int = Path(gt=0),
+    motivo: str | None = Query(default=None, max_length=500),
+    actor: Usuario = Depends(
+        require_permission(MODULO_PARTICIPANTES, PERMISO_AFILIAR_EMPRESA)
+    ),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    try:
+        await ParticipanteService(db).desafiliar_empresa(
+            id_evento_empresa=id_evento_empresa,
+            motivo=motivo,
+            actor=actor,
+        )
+    except ParticipanteServiceError as exc:
+        _raise_http_error(exc)
+        raise
+
+
 @router.patch(
     "/empresas/{id_evento_empresa}/contacto-principal",
     response_model=EventoEmpresaResponse,

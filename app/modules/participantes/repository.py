@@ -136,6 +136,23 @@ class ParticipanteRepository:
         await self.db.flush()
         return evento_empresa
 
+    async def set_evento_empresa_estado(
+        self, evento_empresa: EventoEmpresa, *, estado: bool
+    ) -> EventoEmpresa:
+        evento_empresa.estado = estado
+        await self.db.flush()
+        return evento_empresa
+
+    async def list_evento_contactos_activos_por_empresa(
+        self, *, id_programacion_evento: int, id_empresa: int
+    ) -> list[EventoContacto]:
+        stmt = select(EventoContacto).where(
+            EventoContacto.id_programacion_evento == id_programacion_evento,
+            EventoContacto.id_empresa == id_empresa,
+            EventoContacto.estado.is_(True),
+        )
+        return list((await self.db.scalars(stmt)).all())
+
     async def get_evento_empresa_detalle(
         self, id_evento_empresa: int
     ) -> EventoEmpresaDetalle | None:
@@ -147,7 +164,8 @@ class ParticipanteRepository:
 
     async def list_ids_evento_empresa(self, id_programacion_evento: int) -> list[int]:
         stmt = select(EventoEmpresa.id_evento_empresa).where(
-            EventoEmpresa.id_programacion_evento == id_programacion_evento
+            EventoEmpresa.id_programacion_evento == id_programacion_evento,
+            EventoEmpresa.estado.is_(True),
         )
         return list((await self.db.scalars(stmt)).all())
 
@@ -156,7 +174,10 @@ class ParticipanteRepository:
     ) -> list[EventoEmpresaDetalle]:
         stmt = (
             self._evento_empresa_select()
-            .where(EventoEmpresa.id_programacion_evento == id_programacion_evento)
+            .where(
+                EventoEmpresa.id_programacion_evento == id_programacion_evento,
+                EventoEmpresa.estado.is_(True),
+            )
             .order_by(Empresa.nombre_empresa, EventoEmpresa.id_evento_empresa)
         )
         rows = (await self.db.execute(stmt)).all()
