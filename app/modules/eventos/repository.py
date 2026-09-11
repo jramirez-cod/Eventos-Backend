@@ -346,8 +346,7 @@ class EventoRepository:
             filters.append(
                 select(EventoEmpresa.id_evento_empresa)
                 .where(
-                    EventoEmpresa.id_programacion_evento
-                    == ProgramacionEvento.id_programacion_evento,
+                    EventoEmpresa.id_evento == ProgramacionEvento.id_evento,
                     EventoEmpresa.id_empresa == id_empresa,
                 )
                 .exists()

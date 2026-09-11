@@ -2,7 +2,7 @@ import pytest
 from sqlalchemy import func, select
 
 from app.modules.auditoria.models import Auditoria
-from app.modules.eventos.models import EventoEstado
+from app.modules.eventos.models import EventoEstado, EventoModalidad, ProgramacionEvento
 from app.modules.participantes.models import EventoContacto, EventoEmpresa
 from test.modules.contactos.conftest import create_empresa
 from test.modules.participantes.conftest import (
@@ -77,6 +77,47 @@ async def test_afiliacion_duplicada_devuelve_409_y_no_duplica(
 
     assert first.status_code == 201
     assert second.status_code == 409
+    async with session_factory() as session:
+        assert (
+            await session.scalar(select(func.count()).select_from(EventoEmpresa))
+            == 1
+        )
+
+
+async def test_afiliacion_es_unica_en_todas_las_programaciones_del_evento(
+    client, session_factory
+) -> None:
+    async with session_factory() as session:
+        sequence = next_sequence()
+        _, headers = await seed_participante_actor(session)
+        primera = await create_programacion(session, sequence=sequence)
+        segunda = ProgramacionEvento(
+            id_evento=primera.id_evento,
+            modalidad=EventoModalidad.VIRTUAL,
+            estado=EventoEstado.ABIERTO,
+        )
+        empresa = await create_empresa(session, sequence=30_000 + sequence)
+        session.add(segunda)
+        await session.commit()
+
+    primera_respuesta = await client.post(
+        f"/api/v1/participantes/programaciones/"
+        f"{primera.id_programacion_evento}/empresas",
+        headers=headers,
+        json={"id_empresa": empresa.id_empresa},
+    )
+    segunda_respuesta = await client.post(
+        f"/api/v1/participantes/programaciones/"
+        f"{segunda.id_programacion_evento}/empresas",
+        headers=headers,
+        json={"id_empresa": empresa.id_empresa},
+    )
+
+    assert primera_respuesta.status_code == 201
+    assert segunda_respuesta.status_code == 409
+    assert segunda_respuesta.json()["detail"] == (
+        "La empresa ya está afiliada a este evento."
+    )
     async with session_factory() as session:
         assert (
             await session.scalar(select(func.count()).select_from(EventoEmpresa))

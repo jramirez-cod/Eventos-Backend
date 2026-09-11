@@ -63,7 +63,7 @@ async def test_programacion_finalizada_bloquea_todas_las_acciones(
     async with session_factory() as session:
         evento_empresa = await session.scalar(
             select(EventoEmpresa).where(
-                EventoEmpresa.id_programacion_evento == id_prog,
+                EventoEmpresa.id_evento == prog.id_evento,
                 EventoEmpresa.id_empresa == ctx["empresa"].id_empresa,
             )
         )

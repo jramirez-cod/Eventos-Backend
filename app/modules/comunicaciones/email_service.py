@@ -68,6 +68,18 @@ class CodigoAccesoEmail:
     portal_url: str
 
 
+@dataclass(frozen=True, slots=True)
+class RenderedEmail:
+    sender_email: str
+    recipient_email: str
+    subject: str
+    plain_text: str
+    html: str
+    from_name: str
+    reply_to: str | None = None
+    qr_url: str | None = None
+
+
 class SMTPEmailSender:
     def __init__(self) -> None:
         self.templates = Environment(
@@ -102,6 +114,33 @@ class SMTPEmailSender:
     ) -> None:
         message = self._build_codigo_acceso_message(data)
         await asyncio.to_thread(self._send_message, message, data.sender_email)
+
+    async def send_rendered(self, data: RenderedEmail) -> None:
+        message = self._build_rendered_message(data)
+        await asyncio.to_thread(self._send_message, message, data.sender_email)
+
+    @staticmethod
+    def _build_rendered_message(data: RenderedEmail) -> EmailMessage:
+        message = EmailMessage()
+        message["Subject"] = data.subject
+        message["From"] = formataddr((data.from_name, data.sender_email))
+        message["To"] = data.recipient_email
+        if data.reply_to:
+            message["Reply-To"] = data.reply_to
+        message.set_content(data.plain_text)
+        message.add_alternative(data.html, subtype="html")
+        if data.qr_url:
+            html_part = message.get_payload()[-1]
+            qr_image = qrcode.make(data.qr_url)
+            buffer = BytesIO()
+            qr_image.save(buffer, format="PNG")
+            html_part.add_related(
+                buffer.getvalue(),
+                maintype="image",
+                subtype="png",
+                cid="<qr_image>",
+            )
+        return message
 
     def _build_initial_password_message(
         self,

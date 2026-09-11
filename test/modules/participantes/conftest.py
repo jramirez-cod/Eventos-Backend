@@ -2,6 +2,7 @@ from datetime import UTC, date, datetime, time, timedelta
 from itertools import count
 
 from httpx import AsyncClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import security
@@ -274,13 +275,25 @@ async def crear_programacion_con_dia(
             estado=True,
         )
     )
-    session.add(
-        EventoEmpresa(
-            id_programacion_evento=programacion.id_programacion_evento,
-            id_empresa=empresa.id_empresa,
-            estado=True,
+    afiliacion = await session.scalar(
+        select(EventoEmpresa).where(
+            EventoEmpresa.id_evento == evento.id_evento,
+            EventoEmpresa.id_empresa == empresa.id_empresa,
         )
     )
+    if afiliacion is None:
+        creado_por = await session.scalar(
+            select(Usuario.id_usuario).order_by(Usuario.id_usuario).limit(1)
+        )
+        assert creado_por is not None
+        session.add(
+            EventoEmpresa(
+                id_evento=evento.id_evento,
+                id_empresa=empresa.id_empresa,
+                estado=True,
+                creado_por=creado_por,
+            )
+        )
     await session.commit()
     return programacion
 

@@ -4,6 +4,11 @@ from unittest.mock import AsyncMock
 import pytest
 from sqlalchemy import func, select
 
+from app.modules.comunicaciones.models import (
+    CorreoConfiguracionGlobal,
+    CorreoPlantilla,
+    CorreoPlantillaHistorial,
+)
 from app.modules.usuarios.models import (
     Modulo,
     Permiso,
@@ -59,13 +64,13 @@ async def test_bootstrap_rbac_es_idempotente(
         assert await session.scalar(select(func.count()).select_from(Rol)) == 2
         assert await session.scalar(
             select(func.count()).select_from(Modulo)
-        ) == 8
+        ) == 10
         assert await session.scalar(
             select(func.count()).select_from(Permiso)
-        ) == 30
+        ) == 38
         assert await session.scalar(
             select(func.count()).select_from(RolPermisoModulo)
-        ) == 53
+        ) == 62
         assert await session.scalar(
             select(func.count()).select_from(Usuario)
         ) == 1
@@ -76,7 +81,7 @@ async def test_bootstrap_rbac_es_idempotente(
             .join(Rol, Rol.id_rol == RolPermisoModulo.id_rol)
             .where(Rol.nombre_rol == "PERSONAL_EVENTOS")
         )
-        assert personal_permissions == 23
+        assert personal_permissions == 24
 
         personal_fusion_permission = await session.scalar(
             select(func.count())
@@ -133,3 +138,61 @@ async def test_bootstrap_rbac_es_idempotente(
             )
         )
         assert personal_participante_permissions == 3
+
+        admin_report_permissions = await session.scalar(
+            select(func.count())
+            .select_from(RolPermisoModulo)
+            .join(Rol, Rol.id_rol == RolPermisoModulo.id_rol)
+            .join(Modulo, Modulo.id_modulo == RolPermisoModulo.id_modulo)
+            .where(
+                Rol.nombre_rol == "ADMINISTRADOR_EVENTOS",
+                Modulo.nombre_modulo == "REPORTES",
+            )
+        )
+        assert admin_report_permissions == 3
+
+        personal_report_permissions = await session.scalar(
+            select(Permiso.codigo)
+            .select_from(RolPermisoModulo)
+            .join(Rol, Rol.id_rol == RolPermisoModulo.id_rol)
+            .join(Permiso, Permiso.id_permiso == RolPermisoModulo.id_permiso)
+            .join(Modulo, Modulo.id_modulo == RolPermisoModulo.id_modulo)
+            .where(
+                Rol.nombre_rol == "PERSONAL_EVENTOS",
+                Modulo.nombre_modulo == "REPORTES",
+            )
+        )
+        assert personal_report_permissions == "CONSULTAR_REPORTE_EVENTO"
+
+        admin_comunicacion_permissions = await session.scalar(
+            select(func.count())
+            .select_from(RolPermisoModulo)
+            .join(Rol, Rol.id_rol == RolPermisoModulo.id_rol)
+            .join(Modulo, Modulo.id_modulo == RolPermisoModulo.id_modulo)
+            .where(
+                Rol.nombre_rol == "ADMINISTRADOR_EVENTOS",
+                Modulo.nombre_modulo == "COMUNICACIONES",
+            )
+        )
+        assert admin_comunicacion_permissions == 5
+
+        personal_comunicacion_permissions = await session.scalar(
+            select(func.count())
+            .select_from(RolPermisoModulo)
+            .join(Rol, Rol.id_rol == RolPermisoModulo.id_rol)
+            .join(Modulo, Modulo.id_modulo == RolPermisoModulo.id_modulo)
+            .where(
+                Rol.nombre_rol == "PERSONAL_EVENTOS",
+                Modulo.nombre_modulo == "COMUNICACIONES",
+            )
+        )
+        assert personal_comunicacion_permissions == 0
+        assert await session.scalar(
+            select(func.count()).select_from(CorreoConfiguracionGlobal)
+        ) == 1
+        assert await session.scalar(
+            select(func.count()).select_from(CorreoPlantilla)
+        ) == 4
+        assert await session.scalar(
+            select(func.count()).select_from(CorreoPlantillaHistorial)
+        ) == 4

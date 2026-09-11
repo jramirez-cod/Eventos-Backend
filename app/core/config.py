@@ -41,6 +41,9 @@ class Settings(BaseSettings):
     event_flyer_upload_dir: str = "uploads/eventos"
     event_flyer_max_bytes: int = Field(default=5_242_880, gt=0)
 
+    # Reportes
+    report_export_sync_max_rows: int = Field(default=10_000, gt=0)
+
     # Seguridad
     secret_key: str = ""
     jwt_algorithm: str = "HS256"

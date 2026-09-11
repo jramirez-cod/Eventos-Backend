@@ -147,8 +147,7 @@ async def test_reafiliar_empresa_previamente_desafiliada(
     async with session_factory() as session:
         total = await session.scalar(
             select(EventoEmpresa).where(
-                EventoEmpresa.id_programacion_evento
-                == programacion.id_programacion_evento,
+                EventoEmpresa.id_evento == programacion.id_evento,
                 EventoEmpresa.id_empresa == empresa.id_empresa,
             )
         )

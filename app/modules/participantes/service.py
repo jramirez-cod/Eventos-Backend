@@ -18,9 +18,8 @@ from app.modules.comunicaciones.email_service import (
     CodigoAccesoEmail,
     EmailDeliveryError,
     ParticipanteQrEmail,
-    notify_codigo_acceso,
-    notify_participante_qr,
 )
+from app.modules.comunicaciones.service import CorreoDeliveryService
 from app.modules.contactos.service import ContactoService
 from app.modules.empresas.models import Empresa
 from app.modules.eventos.models import ProgramacionEvento
@@ -195,6 +194,7 @@ class ParticipanteService:
         self.auditoria = AuditoriaRepository(db)
         self.maestros = MaestroRepository(db)
         self.eventos = EventoRepository(db)
+        self.correo = CorreoDeliveryService(db)
 
     # -- EventoEmpresa -----------------------------------------------
 
@@ -208,7 +208,7 @@ class ParticipanteService:
         )
         if existente is not None and existente.estado:
             raise DuplicateEventoEmpresaError(
-                "La empresa ya está afiliada a esta programación."
+                "La empresa ya está afiliada a este evento."
             )
 
         try:
@@ -221,6 +221,7 @@ class ParticipanteService:
                 evento_empresa = await self.participantes.create_evento_empresa(
                     id_programacion_evento=id_programacion_evento,
                     id_empresa=id_empresa,
+                    creado_por=actor.id_usuario,
                 )
                 accion = "AFILIAR_EMPRESA_EVENTO"
             contacto_principal = await self.contactos.contactos.get_contacto_principal(
@@ -242,14 +243,15 @@ class ParticipanteService:
         except IntegrityError as exc:
             await self.db.rollback()
             raise DuplicateEventoEmpresaError(
-                "La empresa ya está afiliada a esta programación."
+                "La empresa ya está afiliada a este evento."
             ) from exc
         except Exception:
             await self.db.rollback()
             raise
 
         return await self._get_evento_empresa_response(
-            evento_empresa.id_evento_empresa
+            evento_empresa.id_evento_empresa,
+            id_programacion_evento=id_programacion_evento,
         )
 
     async def desafiliar_empresa(
@@ -396,7 +398,7 @@ class ParticipanteService:
                 codigo_hash=hash_portal_code(codigo_plano),
                 expira_en=expira_en,
             )
-            await notify_codigo_acceso(
+            await self.correo.notify_codigo_acceso(
                 CodigoAccesoEmail(
                     sender_email=sender_email,
                     recipient_email=contacto.correo,
@@ -990,7 +992,7 @@ class ParticipanteService:
             qr = await self._generar_qr(id_evento_contacto)
         sender_email = await self._get_sender_email()
         try:
-            await notify_participante_qr(
+            await self.correo.notify_participante_qr(
                 ParticipanteQrEmail(
                     sender_email=sender_email,
                     recipient_email=correo,
@@ -1289,14 +1291,10 @@ class ParticipanteService:
         )
 
     async def _get_sender_email(self) -> str:
-        if not settings.email_enabled:
-            return ""
-        sender = await self.usuarios.get_by_id(settings.email_sender_user_id)
-        if sender is None or not sender.correo:
-            raise EmailRemitenteNoConfiguradoError(
-                "El remitente de correo no está configurado."
-            )
-        return sender.correo
+        # CorreoDeliveryService resuelve el usuario emisor desde la
+        # configuración global persistida. Se conserva este método para que
+        # las llamadas existentes sigan construyendo los mismos DTO internos.
+        return ""
 
     @staticmethod
     def _participante_datos(
@@ -1340,10 +1338,14 @@ class ParticipanteService:
         )
 
     async def _get_evento_empresa_response(
-        self, id_evento_empresa: int
+        self,
+        id_evento_empresa: int,
+        *,
+        id_programacion_evento: int | None = None,
     ) -> EventoEmpresaResponse:
         detalle = await self.participantes.get_evento_empresa_detalle(
-            id_evento_empresa
+            id_evento_empresa,
+            id_programacion_evento=id_programacion_evento,
         )
         if detalle is None:
             raise EventoEmpresaNotFoundError("Afiliación no encontrada.")
@@ -1360,7 +1362,7 @@ class ParticipanteService:
         relation = detalle.evento_empresa
         return EventoEmpresaResponse(
             id_evento_empresa=relation.id_evento_empresa,
-            id_programacion_evento=relation.id_programacion_evento,
+            id_programacion_evento=detalle.id_programacion_evento,
             id_empresa=relation.id_empresa,
             nombre_empresa=detalle.empresa.nombre_empresa,
             ruc=detalle.empresa.ruc,
@@ -1368,7 +1370,11 @@ class ParticipanteService:
             nombre_grupo=detalle.grupo.nombre_grupo,
             id_categoria=detalle.categoria.id_categoria,
             nombre_categoria=detalle.categoria.nombre_categoria,
-            id_contacto_principal=relation.id_contacto_principal,
+            id_contacto_principal=(
+                detalle.contacto_principal.id_contacto
+                if detalle.contacto_principal
+                else None
+            ),
             nombre_contacto_principal=(
                 detalle.contacto_principal.nombre_completo
                 if detalle.contacto_principal
@@ -1411,6 +1417,7 @@ class ParticipanteService:
     def _evento_empresa_values(evento_empresa: EventoEmpresa) -> dict[str, Any]:
         return {
             "id_evento_empresa": evento_empresa.id_evento_empresa,
+            "id_evento": evento_empresa.id_evento,
             "id_programacion_evento": evento_empresa.id_programacion_evento,
             "id_empresa": evento_empresa.id_empresa,
             "id_contacto_principal": evento_empresa.id_contacto_principal,

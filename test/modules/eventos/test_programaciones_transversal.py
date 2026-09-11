@@ -54,7 +54,7 @@ async def test_listado_transversal_filtra_por_estado_fecha_y_empresa(
     client, session_factory
 ) -> None:
     async with session_factory() as session:
-        _, headers = await seed_event_actor(session)
+        actor, headers = await seed_event_actor(session)
 
     evento = await crear_evento_http(client, headers, session_factory)
     id_evento = evento["id_evento"]
@@ -76,9 +76,10 @@ async def test_listado_transversal_filtra_por_estado_fecha_y_empresa(
         empresa = await create_empresa(session, sequence=90_001)
         session.add(
             EventoEmpresa(
-                id_programacion_evento=abierta["id_programacion_evento"],
+                id_evento=id_evento,
                 id_empresa=empresa.id_empresa,
                 estado=True,
+                creado_por=actor.id_usuario,
             )
         )
         await session.commit()
@@ -102,7 +103,13 @@ async def test_listado_transversal_filtra_por_estado_fecha_y_empresa(
         params={"id_empresa": id_empresa},
     )
     assert por_empresa.status_code == 200
-    assert por_empresa.json()["total"] == 1
+    assert por_empresa.json()["total"] == 2
+    assert {
+        item["id_programacion_evento"] for item in por_empresa.json()["items"]
+    } == {
+        abierta["id_programacion_evento"],
+        finalizada["id_programacion_evento"],
+    }
     assert (
         por_empresa.json()["items"][0]["id_programacion_evento"]
         == abierta["id_programacion_evento"]

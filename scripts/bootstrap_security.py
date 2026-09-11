@@ -16,8 +16,12 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from app.core import security  # noqa: E402
+from app.core.config import settings  # noqa: E402
 from app.db.session import AsyncSessionLocal, engine  # noqa: E402
 from app.modules.categorias.models import Categoria  # noqa: E402
+from app.modules.comunicaciones.models import CorreoConfiguracionGlobal  # noqa: E402
+from app.modules.comunicaciones.seed import seed_default_templates  # noqa: E402
+from app.modules.comunicaciones.template_catalog import CODIGO_GLOBAL  # noqa: E402
 from app.modules.maestros.models import Beneficio, TipoCalculoBeneficio  # noqa: E402
 from app.modules.usuarios.models import (  # noqa: E402
     Modulo,
@@ -68,6 +72,20 @@ PERMISOS_PARTICIPANTES = (
     "CREAR_PARTICIPANTE",
     "AFILIAR_EMPRESA_EVENTO",
 )
+MODULO_REPORTES = "REPORTES"
+PERMISOS_REPORTES = (
+    "CONSULTAR_REPORTE_EVENTO",
+    "CONSULTAR_DATOS_PERSONALES_REPORTE",
+    "EXPORTAR_REPORTE_EVENTO",
+)
+MODULO_COMUNICACIONES = "COMUNICACIONES"
+PERMISOS_COMUNICACIONES = (
+    "CONSULTAR_PLANTILLA_CORREO",
+    "GESTIONAR_PLANTILLA_CORREO",
+    "RESTAURAR_PLANTILLA_CORREO",
+    "ENVIAR_CORREO_PRUEBA",
+    "CONFIGURAR_CORREO_GLOBAL",
+)
 TIPO_DOCUMENTO_DNI = "DNI"
 TIPO_DOCUMENTO_DNI_LONGITUD = 8
 CATEGORIA_SIN_CATEGORIA = "Sin categoría"
@@ -98,6 +116,10 @@ REQUIRED_TABLES = {
     "asignacion_beneficio",
     "participante_qr",
     "codigo_acceso_principal",
+    "correo_configuracion_global",
+    "correo_plantilla",
+    "correo_plantilla_historial",
+    "correo_envio",
 }
 
 
@@ -327,6 +349,37 @@ async def _get_existing_admin_user(*, rol: Rol) -> Usuario | None:
         return existing
 
 
+async def _ensure_email_configuration(*, admin: Usuario) -> None:
+    async with AsyncSessionLocal() as session:
+        await seed_default_templates(session)
+        configuration = await session.scalar(
+            select(CorreoConfiguracionGlobal).where(
+                CorreoConfiguracionGlobal.codigo == CODIGO_GLOBAL
+            )
+        )
+        if configuration is None:
+            preferred_sender = await session.get(
+                Usuario, settings.email_sender_user_id
+            )
+            sender = (
+                preferred_sender
+                if preferred_sender is not None
+                and preferred_sender.estado
+                and preferred_sender.correo
+                else admin
+            )
+            session.add(
+                CorreoConfiguracionGlobal(
+                    codigo=CODIGO_GLOBAL,
+                    id_usuario_emisor=sender.id_usuario,
+                    nombre_remitente=settings.email_from_name,
+                    estado=True,
+                    actualizado_por=admin.id_usuario,
+                )
+            )
+        await session.commit()
+
+
 def _resolve_admin_args(args: argparse.Namespace) -> dict[str, str]:
     username = args.username or getenv("BOOTSTRAP_ADMIN_USERNAME")
     email = args.email or getenv("BOOTSTRAP_ADMIN_EMAIL")
@@ -390,6 +443,13 @@ async def bootstrap(args: argparse.Namespace) -> None:
     )
     participantes_module = await _get_or_create_module(
         MODULO_PARTICIPANTES, descripcion="Gestión de participantes"
+    )
+    reportes_module = await _get_or_create_module(
+        MODULO_REPORTES, descripcion="Consulta y exportación de reportes de eventos"
+    )
+    comunicaciones_module = await _get_or_create_module(
+        MODULO_COMUNICACIONES,
+        descripcion="Configuración y plantillas globales de correo",
     )
     tipo_documento_dni = await _get_or_create_tipo_documento(
         TIPO_DOCUMENTO_DNI, longitud=TIPO_DOCUMENTO_DNI_LONGITUD
@@ -481,6 +541,32 @@ async def bootstrap(args: argparse.Namespace) -> None:
                 permiso=permission,
             )
 
+    # Reportes: ambos roles consultan agregados. Los datos personales y la
+    # exportación se reservan inicialmente al administrador.
+    for permission_name in PERMISOS_REPORTES:
+        permission = await _get_or_create_permission(permission_name)
+        await _ensure_role_permission(
+            rol=admin_role,
+            modulo=reportes_module,
+            permiso=permission,
+        )
+        if permission_name == "CONSULTAR_REPORTE_EVENTO":
+            await _ensure_role_permission(
+                rol=personal_role,
+                modulo=reportes_module,
+                permiso=permission,
+            )
+
+    # Comunicaciones: las plantillas globales afectan a todo el sistema y se
+    # administran exclusivamente con el rol administrador.
+    for permission_name in PERMISOS_COMUNICACIONES:
+        permission = await _get_or_create_permission(permission_name)
+        await _ensure_role_permission(
+            rol=admin_role,
+            modulo=comunicaciones_module,
+            permiso=permission,
+        )
+
     admin_args = _resolve_admin_args(args) if existing_admin is None else None
     admin = (
         await _ensure_admin_user(
@@ -489,6 +575,7 @@ async def bootstrap(args: argparse.Namespace) -> None:
         if admin_args is not None
         else existing_admin
     )
+    await _ensure_email_configuration(admin=admin)
     print(
         "Bootstrap de seguridad completado. "
         f"Administrador: {admin.nombre_usuario} (id={admin.id_usuario})."

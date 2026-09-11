@@ -18,29 +18,30 @@ class EventoEmpresa(Base):
     __tablename__ = "evento_empresa"
     __table_args__ = (
         UniqueConstraint(
-            "id_programacion_evento",
+            "id_evento",
             "id_empresa",
-            name="uq_evento_empresa_programacion_empresa",
+            name="uq_evento_empresa_evento_empresa",
         ),
     )
 
     id_evento_empresa: Mapped[int] = mapped_column(
         BigInteger, primary_key=True, index=True
     )
-    id_programacion_evento: Mapped[int] = mapped_column(
-        ForeignKey(
-            "programacion_evento.id_programacion_evento", ondelete="CASCADE"
-        ),
+    id_evento: Mapped[int] = mapped_column(
+        ForeignKey("evento.id_evento", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
     id_empresa: Mapped[int] = mapped_column(
         ForeignKey("empresa.id_empresa"), nullable=False, index=True
     )
-    id_contacto_principal: Mapped[int | None] = mapped_column(
-        ForeignKey("contacto.id_contacto"), index=True
-    )
     estado: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    creado_en: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    creado_por: Mapped[int] = mapped_column(
+        ForeignKey("usuario.id_usuario"), nullable=False, index=True
+    )
 
 
 class EventoContacto(Base):

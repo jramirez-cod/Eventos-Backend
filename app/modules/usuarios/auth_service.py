@@ -11,9 +11,8 @@ from app.modules.comunicaciones.email_service import (
     InitialPasswordEmail,
     PasswordRecoveryEmail,
     mask_email,
-    notify_initial_password_code,
-    notify_password_recovery_code,
 )
+from app.modules.comunicaciones.service import CorreoDeliveryService
 from app.modules.usuarios.dto import (
     CambioPasswordInicialRequestDTO,
     LoginRequestDTO,
@@ -75,16 +74,21 @@ class AuthService:
         self,
         db: AsyncSession,
         *,
-        recovery_notifier: PasswordRecoveryNotifier = notify_password_recovery_code,
-        initial_password_notifier: InitialPasswordCodeNotifier = (
-            notify_initial_password_code
-        ),
+        recovery_notifier: PasswordRecoveryNotifier | None = None,
+        initial_password_notifier: InitialPasswordCodeNotifier | None = None,
     ) -> None:
         self.db = db
         self.usuarios = UsuarioRepository(db)
         self.auditoria = AuditoriaRepository(db)
-        self.recovery_notifier = recovery_notifier
-        self.initial_password_notifier = initial_password_notifier
+        email_delivery = CorreoDeliveryService(db)
+        self._recovery_uses_configured_delivery = recovery_notifier is None
+        self._initial_uses_configured_delivery = initial_password_notifier is None
+        self.recovery_notifier = (
+            recovery_notifier or email_delivery.notify_password_recovery_code
+        )
+        self.initial_password_notifier = (
+            initial_password_notifier or email_delivery.notify_initial_password_code
+        )
 
     async def login(self, data: LoginRequestDTO) -> LoginResponseDTO:
         usuario = await self.usuarios.get_by_username(data.nombre_usuario)
@@ -97,7 +101,11 @@ class AuthService:
             raise InactiveUserError("Usuario inactivo.")
 
         if usuario.debe_cambiar_password:
-            sender_email = await self._get_sender_email()
+            sender_email = (
+                ""
+                if self._initial_uses_configured_delivery
+                else await self._get_sender_email()
+            )
             token = security.create_password_change_token(usuario.id_usuario)
             token_payload = security.decode_password_change_token(token)
             token_id = str(token_payload["jti"])
@@ -135,6 +143,7 @@ class AuthService:
                         ),
                     )
                 )
+                await self.db.commit()
             except EmailDeliveryError as exc:
                 try:
                     await self.usuarios.mark_recovery_token_used(stored_token)
@@ -242,7 +251,11 @@ class AuthService:
         if usuario is None or not usuario.estado:
             return response
 
-        sender_email = await self._get_sender_email()
+        sender_email = (
+            ""
+            if self._recovery_uses_configured_delivery
+            else await self._get_sender_email()
+        )
         verification_code = security.generate_initial_verification_code()
         code_hash = security.hash_recovery_code(
             correo=usuario.correo, code=verification_code
@@ -272,6 +285,7 @@ class AuthService:
                     expires_minutes=settings.recovery_token_expire_minutes,
                 )
             )
+            await self.db.commit()
         except EmailDeliveryError as exc:
             try:
                 await self.usuarios.mark_recovery_token_used(stored_token)

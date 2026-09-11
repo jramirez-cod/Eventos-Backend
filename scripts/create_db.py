@@ -23,10 +23,12 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from sqlalchemy.ext.asyncio import create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from app.db.base import Base
 from app.core.config import settings
 from app.modules.contactos import models as contactos_models  # noqa: E402,F401
+from app.modules.comunicaciones import models as comunicaciones_models  # noqa: E402,F401
+from app.modules.comunicaciones.seed import seed_default_templates  # noqa: E402
 from app.modules.eventos import models as eventos_models  # noqa: E402,F401
 from app.modules.maestros import models as maestros_models  # noqa: E402,F401
 from app.modules.participantes import models as participantes_models  # noqa: E402,F401
@@ -36,6 +38,10 @@ async def create_tables() -> None:
     engine = create_async_engine(settings.database_url)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        await seed_default_templates(session)
+        await session.commit()
     await engine.dispose()
 
 
