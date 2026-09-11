@@ -182,6 +182,14 @@ class InvitadoInvalidoError(ParticipanteServiceError):
     pass
 
 
+class InvitadoDatosConflictoError(ParticipanteServiceError):
+    pass
+
+
+class InvitadoDuplicadoEnProgramacionError(ParticipanteServiceError):
+    pass
+
+
 class ProgramacionSinDiasError(ParticipanteServiceError):
     pass
 
@@ -677,6 +685,35 @@ class ParticipanteService:
                 "invitados no registrados para esta empresa."
             )
 
+        correo = str(data.correo)
+        duplicado_en_programacion = (
+            await self.participantes.get_invitado_duplicado_en_programacion(
+                id_programacion_evento=id_programacion_evento,
+                numero_documento=data.numero_documento,
+                correo=correo,
+            )
+        )
+        if duplicado_en_programacion is not None:
+            raise InvitadoDuplicadoEnProgramacionError(
+                "Ya se registró un invitado con ese número de documento o "
+                "correo en esta programación."
+            )
+        contacto_existente = await self.contactos.contactos.get_by_documento(
+            data.numero_documento
+        )
+        if contacto_existente is None:
+            contacto_existente = await self.contactos.contactos.get_by_correo(correo)
+        if contacto_existente is not None:
+            raise InvitadoDatosConflictoError(
+                "No se pudo registrar al invitado con los datos indicados. "
+                "Comuníquese con CODIP para verificar y agregar al contacto."
+            )
+
+        if data.id_beneficio is not None:
+            beneficio = await self.maestros.get_beneficio_by_id(data.id_beneficio)
+            if beneficio is None or not beneficio.estado:
+                raise ParticipanteBeneficioNotFoundError("Beneficio no encontrado.")
+
         try:
             evento_contacto = (
                 await self.participantes.create_evento_contacto_invitado(
@@ -685,7 +722,7 @@ class ParticipanteService:
                     nombres=data.nombres.strip(),
                     apellidos=data.apellidos.strip(),
                     numero_documento=data.numero_documento,
-                    correo=data.correo,
+                    correo=correo,
                     celular=data.celular,
                 )
             )
@@ -702,6 +739,15 @@ class ParticipanteService:
         except Exception:
             await self.db.rollback()
             raise
+
+        if data.id_beneficio is not None:
+            await self.asignar_beneficio(
+                data=AsignarBeneficioRequest(
+                    ids_evento_contacto=[evento_contacto.id_evento_contacto],
+                    id_beneficio=data.id_beneficio,
+                ),
+                actor=actor,
+            )
         return await self.obtener_evento_contacto(evento_contacto.id_evento_contacto)
 
     async def actualizar_estado_evento_contacto(
@@ -1284,6 +1330,13 @@ class ParticipanteService:
 
     async def _generar_qr(self, id_evento_contacto: int) -> ParticipanteQr:
         codigo_seguro = secrets.token_urlsafe(32)
+        existente = await self.participantes.get_participante_qr_by_evento_contacto(
+            id_evento_contacto, solo_activos=False
+        )
+        if existente is not None:
+            return await self.participantes.reactivar_participante_qr(
+                existente, codigo_seguro=codigo_seguro
+            )
         return await self.participantes.create_participante_qr(
             id_evento_contacto=id_evento_contacto, codigo_seguro=codigo_seguro
         )

@@ -256,6 +256,30 @@ class ParticipanteRepository:
         )
         return int(await self.db.scalar(stmt) or 0)
 
+    async def get_invitado_duplicado_en_programacion(
+        self,
+        *,
+        id_programacion_evento: int,
+        numero_documento: str | None,
+        correo: str | None,
+    ) -> EventoContacto | None:
+        if numero_documento is None and correo is None:
+            return None
+        condiciones = []
+        if numero_documento is not None:
+            condiciones.append(
+                EventoContacto.invitado_numero_documento == numero_documento
+            )
+        if correo is not None:
+            condiciones.append(EventoContacto.invitado_correo.ilike(correo))
+        stmt = select(EventoContacto).where(
+            EventoContacto.id_programacion_evento == id_programacion_evento,
+            EventoContacto.id_contacto.is_(None),
+            EventoContacto.estado.is_(True),
+            or_(*condiciones),
+        )
+        return await self.db.scalar(stmt)
+
     async def get_evento_contacto_by_id(
         self, id_evento_contacto: int, *, for_update: bool = False
     ) -> EventoContacto | None:
@@ -526,13 +550,23 @@ class ParticipanteRepository:
         return qr
 
     async def get_participante_qr_by_evento_contacto(
-        self, id_evento_contacto: int
+        self, id_evento_contacto: int, *, solo_activos: bool = True
     ) -> ParticipanteQr | None:
         stmt = select(ParticipanteQr).where(
-            ParticipanteQr.id_evento_contacto == id_evento_contacto,
-            ParticipanteQr.estado.is_(True),
+            ParticipanteQr.id_evento_contacto == id_evento_contacto
         )
+        if solo_activos:
+            stmt = stmt.where(ParticipanteQr.estado.is_(True))
         return await self.db.scalar(stmt)
+
+    async def reactivar_participante_qr(
+        self, qr: ParticipanteQr, *, codigo_seguro: str
+    ) -> ParticipanteQr:
+        qr.codigo_seguro = codigo_seguro
+        qr.estado = True
+        qr.fecha_envio = None
+        await self.db.flush()
+        return qr
 
     async def get_participante_qr_by_codigo(
         self, codigo_seguro: str

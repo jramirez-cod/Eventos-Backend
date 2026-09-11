@@ -54,6 +54,8 @@ from app.modules.participantes.service import (
     EventoContactoNotFoundError,
     EventoEmpresaNotFoundError,
     EventoNotOpenError,
+    InvitadoDatosConflictoError,
+    InvitadoDuplicadoEnProgramacionError,
     InvitadoInvalidoError,
     LimiteInvitadosSuperadoError,
     ParticipanteBeneficioNotFoundError,
@@ -115,6 +117,8 @@ def _raise_http_error(exc: ParticipanteServiceError | ContactoServiceError) -> N
             CupoBeneficioAgotadoError,
             LimiteInvitadosSuperadoError,
             ProgramacionSinDiasError,
+            InvitadoDatosConflictoError,
+            InvitadoDuplicadoEnProgramacionError,
         ),
     ):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))

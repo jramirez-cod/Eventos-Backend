@@ -184,8 +184,7 @@ class SMTPEmailSender:
         message.set_content(plain_text)
         message.add_alternative(html, subtype="html")
         html_part = message.get_payload()[-1]
-        qr_url = f"{settings.frontend_base_url}/eventos/credencial/{data.codigo_seguro}"
-        qr_image = qrcode.make(qr_url)
+        qr_image = qrcode.make(data.codigo_seguro)
         buffer = BytesIO()
         qr_image.save(buffer, format="PNG")
         html_part.add_related(
