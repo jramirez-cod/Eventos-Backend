@@ -448,11 +448,13 @@ class EventoService:
         estado: EventoEstado | None,
         page: int,
         page_size: int,
+        id_evento: int | None = None,
     ) -> ProgramacionEventoTransversalListResponse:
         self._validate_filter_dates(fecha_desde, fecha_hasta)
         rows, total = await self.eventos.list_programaciones_transversal(
             fecha_desde=fecha_desde,
             fecha_hasta=fecha_hasta,
+            id_evento=id_evento,
             id_empresa=id_empresa,
             estado=estado,
             page=page,

@@ -70,13 +70,19 @@ PLANTILLAS_BASE: tuple[PlantillaBase, ...] = (
         archivo_html="codigo_acceso_principal.html",
         cuerpo_texto=(
             "Hola, {{ recipient_name }}.\n\nTe compartimos el código de acceso para "
-            "gestionar participantes de {{ nombre_empresa }}: {{ codigo }}\n\n"
+            "gestionar participantes de {{ nombre_empresa }} en {{ nombre_evento }} "
+            "({{ fecha_evento }}): {{ codigo }}\n\n"
+            "Vence el {{ expira_en }}. Si recibiste varios correos, usa el más "
+            "reciente: al generar un código nuevo el anterior deja de servir.\n\n"
             "Ingresa aquí: {{ portal_url }}"
         ),
         variables_permitidas=(
             "recipient_name",
             "nombre_empresa",
+            "nombre_evento",
+            "fecha_evento",
             "codigo",
+            "expira_en",
             "portal_url",
         ),
     ),

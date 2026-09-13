@@ -15,7 +15,10 @@ from app.modules.comunicaciones.dto import (
     CorreoPlantillaUpdate,
     CorreoPruebaRequest,
 )
-from app.modules.comunicaciones.email_service import EmailDeliveryError
+from app.modules.comunicaciones.email_service import (
+    EmailConfigurationError,
+    EmailDeliveryError,
+)
 from app.modules.comunicaciones.service import (
     ComunicacionService,
     ComunicacionServiceError,
@@ -49,6 +52,12 @@ def _raise_http_error(exc: Exception) -> None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
     if isinstance(exc, (PlantillaInvalidError, EmisorCorreoInvalidError)):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    # Falta de plantilla o remitente es configuración pendiente, no una caída
+    # del SMTP: se responde 503 para que el panel lo distinga de un fallo real.
+    if isinstance(exc, EmailConfigurationError):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)
+        )
     if isinstance(exc, EmailDeliveryError):
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
     raise exc

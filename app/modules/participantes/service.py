@@ -1,8 +1,9 @@
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time, timezone
 import math
 import secrets
 from typing import Any
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -66,7 +67,10 @@ from app.modules.usuarios.repository import UsuarioRepository
 
 MODULO_PARTICIPANTES = "PARTICIPANTES"
 LIMITE_INVITADOS_SIN_REGISTRAR = 20
-CODIGO_ACCESO_DIAS_ANTES_EXPIRA = 1
+PERU_TIMEZONE = ZoneInfo("America/Lima")
+# CorreoDeliveryService resuelve el remitente desde la configuración global
+# persistida; el campo del DTO solo actúa como respaldo cuando no existe.
+SENDER_DESDE_CONFIGURACION = ""
 
 
 class ParticipanteServiceError(Exception):
@@ -165,10 +169,6 @@ class PasswordIncorrectoError(ParticipanteServiceError):
     pass
 
 
-class EmailRemitenteNoConfiguradoError(ParticipanteServiceError):
-    pass
-
-
 class ContactoPrincipalInvalidoError(ParticipanteServiceError):
     pass
 
@@ -181,7 +181,19 @@ class InvitadoInvalidoError(ParticipanteServiceError):
     pass
 
 
+class InvitadoDatosConflictoError(ParticipanteServiceError):
+    pass
+
+
+class InvitadoDuplicadoEnProgramacionError(ParticipanteServiceError):
+    pass
+
+
 class ProgramacionSinDiasError(ParticipanteServiceError):
+    pass
+
+
+class CodigoAccesoYaVencidoError(ParticipanteServiceError):
     pass
 
 
@@ -255,10 +267,17 @@ class ParticipanteService:
         )
 
     async def desafiliar_empresa(
-        self, *, id_evento_empresa: int, motivo: str | None, actor: Usuario
+        self,
+        *,
+        id_evento_empresa: int,
+        motivo: str | None,
+        actor: Usuario,
+        id_programacion_evento: int | None = None,
     ) -> None:
         evento_empresa = await self.participantes.get_evento_empresa_by_id(
-            id_evento_empresa, for_update=True
+            id_evento_empresa,
+            id_programacion_evento=id_programacion_evento,
+            for_update=True,
         )
         if evento_empresa is None:
             raise EventoEmpresaNotFoundError("Afiliación no encontrada.")
@@ -310,10 +329,15 @@ class ParticipanteService:
         return [self._evento_empresa_response(row) for row in rows]
 
     async def asignar_contacto_principal(
-        self, *, id_evento_empresa: int, id_contacto: int, actor: Usuario
+        self,
+        *,
+        id_evento_empresa: int,
+        id_contacto: int,
+        actor: Usuario,
+        id_programacion_evento: int | None = None,
     ) -> EventoEmpresaResponse:
         evento_empresa = await self.participantes.get_evento_empresa_by_id(
-            id_evento_empresa
+            id_evento_empresa, id_programacion_evento=id_programacion_evento
         )
         if evento_empresa is None:
             raise EventoEmpresaNotFoundError("Afiliación no encontrada.")
@@ -349,7 +373,10 @@ class ParticipanteService:
         except Exception:
             await self.db.rollback()
             raise
-        return await self._get_evento_empresa_response(id_evento_empresa)
+        return await self._get_evento_empresa_response(
+            id_evento_empresa,
+            id_programacion_evento=evento_empresa.id_programacion_evento,
+        )
 
     async def enviar_codigo_acceso(
         self,
@@ -357,9 +384,10 @@ class ParticipanteService:
         id_evento_empresa: int,
         actor: Usuario,
         motivo: str | None = None,
+        id_programacion_evento: int | None = None,
     ) -> EventoEmpresaResponse:
         evento_empresa = await self.participantes.get_evento_empresa_by_id(
-            id_evento_empresa
+            id_evento_empresa, id_programacion_evento=id_programacion_evento
         )
         if evento_empresa is None:
             raise EventoEmpresaNotFoundError("Afiliación no encontrada.")
@@ -380,17 +408,25 @@ class ParticipanteService:
             raise ProgramacionSinDiasError(
                 "La programación debe tener al menos un día registrado."
             )
-        primera_fecha: date = min(dia.fecha for dia in dias)
-        expira_en = datetime.combine(
-            primera_fecha - timedelta(days=CODIGO_ACCESO_DIAS_ANTES_EXPIRA),
-            datetime.min.time(),
-            tzinfo=timezone.utc,
-        )
+        primer_dia = min(dias, key=lambda dia: dia.fecha)
+        expira_en = self._expiracion_codigo_acceso(primer_dia)
+        # El portal rechaza un código vencido, así que enviarlo solo generaría
+        # un correo inservible: se avisa antes en vez de fallar del otro lado.
+        if expira_en <= datetime.now(timezone.utc):
+            raise CodigoAccesoYaVencidoError(
+                "El primer día de la programación ya terminó, por lo que el "
+                "código de acceso nacería vencido. Actualice las fechas de la "
+                "programación antes de enviarlo."
+            )
 
         empresa = await self.participantes.get_empresa(evento_empresa.id_empresa)
         assert empresa is not None
+        programacion = await self.participantes.get_programacion(
+            evento_empresa.id_programacion_evento
+        )
+        assert programacion is not None
+        evento = await self.eventos.get_by_id(programacion.id_evento)
         codigo_plano = generate_portal_code()
-        sender_email = await self._get_sender_email()
         try:
             await self.participantes.invalidar_codigos(id_evento_empresa)
             codigo = await self.participantes.create_codigo(
@@ -400,11 +436,16 @@ class ParticipanteService:
             )
             await self.correo.notify_codigo_acceso(
                 CodigoAccesoEmail(
-                    sender_email=sender_email,
+                    sender_email=SENDER_DESDE_CONFIGURACION,
                     recipient_email=contacto.correo,
                     recipient_name=contacto.nombre_completo,
                     nombre_empresa=empresa.nombre_empresa,
+                    nombre_evento=(
+                        evento.nombre_evento if evento is not None else ""
+                    ),
+                    fecha_evento=self._formato_fecha_evento(primer_dia),
                     codigo=codigo_plano,
+                    expira_en=self._formato_expiracion(expira_en),
                     portal_url=(
                         f"{settings.frontend_base_url}/portal-invitados"
                         f"?codigo={codigo_plano}"
@@ -424,7 +465,10 @@ class ParticipanteService:
         except Exception:
             await self.db.rollback()
             raise
-        return await self._get_evento_empresa_response(id_evento_empresa)
+        return await self._get_evento_empresa_response(
+            id_evento_empresa,
+            id_programacion_evento=evento_empresa.id_programacion_evento,
+        )
 
     async def enviar_codigo_acceso_masivo(
         self, *, id_programacion_evento: int, actor: Usuario
@@ -442,7 +486,9 @@ class ParticipanteService:
                 continue
             try:
                 await self.enviar_codigo_acceso(
-                    id_evento_empresa=id_evento_empresa, actor=actor
+                    id_evento_empresa=id_evento_empresa,
+                    actor=actor,
+                    id_programacion_evento=id_programacion_evento,
                 )
                 enviados += 1
             except (ParticipanteServiceError, EmailDeliveryError):
@@ -679,6 +725,35 @@ class ParticipanteService:
                 "invitados no registrados para esta empresa."
             )
 
+        correo = str(data.correo)
+        duplicado_en_programacion = (
+            await self.participantes.get_invitado_duplicado_en_programacion(
+                id_programacion_evento=id_programacion_evento,
+                numero_documento=data.numero_documento,
+                correo=correo,
+            )
+        )
+        if duplicado_en_programacion is not None:
+            raise InvitadoDuplicadoEnProgramacionError(
+                "Ya se registró un invitado con ese número de documento o "
+                "correo en esta programación."
+            )
+        contacto_existente = await self.contactos.contactos.get_by_documento(
+            data.numero_documento
+        )
+        if contacto_existente is None:
+            contacto_existente = await self.contactos.contactos.get_by_correo(correo)
+        if contacto_existente is not None:
+            raise InvitadoDatosConflictoError(
+                "No se pudo registrar al invitado con los datos indicados. "
+                "Comuníquese con CODIP para verificar y agregar al contacto."
+            )
+
+        if data.id_beneficio is not None:
+            beneficio = await self.maestros.get_beneficio_by_id(data.id_beneficio)
+            if beneficio is None or not beneficio.estado:
+                raise ParticipanteBeneficioNotFoundError("Beneficio no encontrado.")
+
         try:
             evento_contacto = (
                 await self.participantes.create_evento_contacto_invitado(
@@ -687,7 +762,7 @@ class ParticipanteService:
                     nombres=data.nombres.strip(),
                     apellidos=data.apellidos.strip(),
                     numero_documento=data.numero_documento,
-                    correo=data.correo,
+                    correo=correo,
                     celular=data.celular,
                 )
             )
@@ -704,6 +779,15 @@ class ParticipanteService:
         except Exception:
             await self.db.rollback()
             raise
+
+        if data.id_beneficio is not None:
+            await self.asignar_beneficio(
+                data=AsignarBeneficioRequest(
+                    ids_evento_contacto=[evento_contacto.id_evento_contacto],
+                    id_beneficio=data.id_beneficio,
+                ),
+                actor=actor,
+            )
         return await self.obtener_evento_contacto(evento_contacto.id_evento_contacto)
 
     async def actualizar_estado_evento_contacto(
@@ -990,11 +1074,10 @@ class ParticipanteService:
         )
         if qr is None:
             qr = await self._generar_qr(id_evento_contacto)
-        sender_email = await self._get_sender_email()
         try:
             await self.correo.notify_participante_qr(
                 ParticipanteQrEmail(
-                    sender_email=sender_email,
+                    sender_email=SENDER_DESDE_CONFIGURACION,
                     recipient_email=correo,
                     recipient_name=nombre_completo,
                     codigo_seguro=qr.codigo_seguro,
@@ -1286,15 +1369,44 @@ class ParticipanteService:
 
     async def _generar_qr(self, id_evento_contacto: int) -> ParticipanteQr:
         codigo_seguro = secrets.token_urlsafe(32)
+        existente = await self.participantes.get_participante_qr_by_evento_contacto(
+            id_evento_contacto, solo_activos=False
+        )
+        if existente is not None:
+            return await self.participantes.reactivar_participante_qr(
+                existente, codigo_seguro=codigo_seguro
+            )
         return await self.participantes.create_participante_qr(
             id_evento_contacto=id_evento_contacto, codigo_seguro=codigo_seguro
         )
 
-    async def _get_sender_email(self) -> str:
-        # CorreoDeliveryService resuelve el usuario emisor desde la
-        # configuración global persistida. Se conserva este método para que
-        # las llamadas existentes sigan construyendo los mismos DTO internos.
-        return ""
+    @staticmethod
+    def _formato_fecha_evento(primer_dia: Any) -> str:
+        fecha = primer_dia.fecha.strftime("%d/%m/%Y")
+        if primer_dia.hora_inicio is None:
+            return fecha
+        inicio = primer_dia.hora_inicio.strftime("%H:%M")
+        if primer_dia.hora_fin is None:
+            return f"{fecha} desde las {inicio}"
+        return f"{fecha} de {inicio} a {primer_dia.hora_fin.strftime('%H:%M')}"
+
+    @staticmethod
+    def _formato_expiracion(expira_en: datetime) -> str:
+        local = expira_en.astimezone(PERU_TIMEZONE)
+        return local.strftime("%d/%m/%Y a las %H:%M")
+
+    @staticmethod
+    def _expiracion_codigo_acceso(primer_dia: Any) -> datetime:
+        """Vence al terminar el primer día del evento, en hora de Perú.
+
+        El portal sirve para que la empresa inscriba participantes, así que el
+        código debe seguir vigente hasta que ese día acabe. Atarlo a una fecha
+        anterior dejaba sin portal a los eventos creados para hoy o mañana.
+        """
+        fin_del_dia = primer_dia.hora_fin or time.max
+        return datetime.combine(
+            primer_dia.fecha, fin_del_dia, tzinfo=PERU_TIMEZONE
+        ).astimezone(timezone.utc)
 
     @staticmethod
     def _participante_datos(

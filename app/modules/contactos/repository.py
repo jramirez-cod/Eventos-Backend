@@ -49,6 +49,14 @@ class ContactoRepository:
             stmt = stmt.where(Contacto.id_contacto != exclude_id)
         return await self.db.scalar(stmt)
 
+    async def get_by_correo(
+        self, correo: str, *, exclude_id: int | None = None
+    ) -> Contacto | None:
+        stmt = select(Contacto).where(Contacto.correo.ilike(correo))
+        if exclude_id is not None:
+            stmt = stmt.where(Contacto.id_contacto != exclude_id)
+        return await self.db.scalar(stmt)
+
     async def get_empresa(self, id_empresa: int) -> Empresa | None:
         return await self.db.get(Empresa, id_empresa)
 
@@ -129,6 +137,7 @@ class ContactoRepository:
         self, contacto: Contacto, *, id_empresa: int
     ) -> Contacto:
         contacto.id_empresa = id_empresa
+        contacto.es_contacto_principal = False
         await self.db.flush()
         return contacto
 

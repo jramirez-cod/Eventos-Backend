@@ -45,6 +45,11 @@ from app.modules.usuarios.models import Usuario
 from app.modules.usuarios.repository import UsuarioRepository
 
 
+# Código ficticio que se codifica en el QR de los envíos de prueba, para que
+# el correo llegue igual que uno real sin exponer un código válido.
+CODIGO_QR_DE_PRUEBA = "QR-DE-PRUEBA-SIN-VALIDEZ"
+
+
 MODULO_COMUNICACIONES = "COMUNICACIONES"
 
 
@@ -287,12 +292,19 @@ class ComunicacionService:
                 "El envío SMTP está deshabilitado en la configuración."
             )
         delivery = CorreoDeliveryService(self.db)
+        # La plantilla de QR referencia la imagen embebida (cid:qr_image). Sin
+        # adjuntarla, la prueba llega con la imagen rota y no sirve para validar
+        # cómo la recibe el participante.
+        qr_url = (
+            CODIGO_QR_DE_PRUEBA if codigo.upper() == QR_PARTICIPANTE else None
+        )
         await delivery.send_template(
             codigo=codigo,
             recipient_email=str(data.destinatario),
             contexto=data.contexto,
             fallback_sender_email="",
             entidad_origen="correo_prueba",
+            qr_url=qr_url,
         )
         await self.db.commit()
 
@@ -405,6 +417,7 @@ class CorreoDeliveryService:
         await self._notify_with_console_fallback(
             codigo=QR_PARTICIPANTE,
             recipient_email=data.recipient_email,
+            # Por seguridad el código nunca viaja en texto: solo dentro del QR.
             contexto={"recipient_name": data.recipient_name},
             fallback_sender_email=data.sender_email,
             console_message=(
@@ -412,10 +425,7 @@ class CorreoDeliveryService:
                 f"{data.codigo_seguro}"
             ),
             entidad_origen="participante_qr",
-            qr_url=(
-                f"{settings.frontend_base_url}/eventos/credencial/"
-                f"{data.codigo_seguro}"
-            ),
+            qr_url=data.codigo_seguro,
         )
 
     async def notify_codigo_acceso(self, data: CodigoAccesoEmail) -> None:
@@ -425,7 +435,10 @@ class CorreoDeliveryService:
             contexto={
                 "recipient_name": data.recipient_name,
                 "nombre_empresa": data.nombre_empresa,
+                "nombre_evento": data.nombre_evento,
+                "fecha_evento": data.fecha_evento,
                 "codigo": data.codigo,
+                "expira_en": data.expira_en,
                 "portal_url": data.portal_url,
             },
             fallback_sender_email=data.sender_email,

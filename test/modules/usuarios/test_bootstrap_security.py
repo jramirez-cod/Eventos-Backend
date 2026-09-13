@@ -4,11 +4,13 @@ from unittest.mock import AsyncMock
 import pytest
 from sqlalchemy import func, select
 
+from app.modules.categorias.models import Categoria
 from app.modules.comunicaciones.models import (
     CorreoConfiguracionGlobal,
     CorreoPlantilla,
     CorreoPlantillaHistorial,
 )
+from app.modules.maestros.models import Beneficio, TipoCalculoBeneficio
 from app.modules.usuarios.models import (
     Modulo,
     Permiso,
@@ -74,6 +76,39 @@ async def test_bootstrap_rbac_es_idempotente(
         assert await session.scalar(
             select(func.count()).select_from(Usuario)
         ) == 1
+        assert await session.scalar(
+            select(func.count()).select_from(Categoria)
+        ) == 4
+        assert await session.scalar(
+            select(func.count()).select_from(Beneficio)
+        ) == 3
+
+        categorias = set(
+            (
+                await session.scalars(
+                    select(Categoria.nombre_categoria)
+                )
+            ).all()
+        )
+        assert categorias == {"Sin categoría", "A", "B", "C"}
+
+        beneficios = {
+            beneficio.nombre: beneficio
+            for beneficio in (
+                await session.scalars(select(Beneficio))
+            ).all()
+        }
+        assert beneficios["Sin beneficio"].tipo_calculo == (
+            TipoCalculoBeneficio.SIN_BENEFICIO
+        )
+        assert beneficios["Entrada gratuita"].tipo_calculo == (
+            TipoCalculoBeneficio.POR_EVENTO
+        )
+        assert beneficios["Entrada gratuita"].personas_por_asignacion == 1
+        assert beneficios["Entrada doble"].tipo_calculo == (
+            TipoCalculoBeneficio.POR_ANIO
+        )
+        assert beneficios["Entrada doble"].personas_por_asignacion == 2
 
         personal_permissions = await session.scalar(
             select(func.count())

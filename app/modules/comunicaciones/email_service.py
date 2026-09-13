@@ -1,7 +1,8 @@
 import asyncio
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from email.message import EmailMessage
-from email.utils import formataddr
+from email.utils import format_datetime, formataddr, make_msgid
 from io import BytesIO
 from pathlib import Path
 import smtplib
@@ -66,6 +67,11 @@ class CodigoAccesoEmail:
     nombre_empresa: str
     codigo: str
     portal_url: str
+    # Identifican de qué evento es el código y hasta cuándo sirve: sin esto dos
+    # correos de empresas homónimas resultaban indistinguibles.
+    nombre_evento: str = ""
+    fecha_evento: str = ""
+    expira_en: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,6 +84,55 @@ class RenderedEmail:
     from_name: str
     reply_to: str | None = None
     qr_url: str | None = None
+
+
+QR_IMAGE_CID = "qr_image"
+QR_IMAGE_FILENAME = "codigo-qr-ingreso.png"
+
+
+def build_qr_png(contenido: str) -> bytes:
+    """Genera el QR como PNG RGB.
+
+    `qrcode.make(...)` produce un PNG de 1 bit (modo "1"); varios clientes y
+    proxies de imagen (Gmail entre ellos) no lo renderizan embebido y lo
+    degradan a un adjunto suelto con la imagen rota en el cuerpo. Un PNG RGB
+    convencional se muestra en todos.
+    """
+    qr = qrcode.QRCode(
+        error_correction=qrcode.constants.ERROR_CORRECT_M,
+        box_size=10,
+        border=4,
+    )
+    qr.add_data(contenido)
+    qr.make(fit=True)
+    image = qr.make_image(fill_color="black", back_color="white").get_image()
+    buffer = BytesIO()
+    image.convert("RGB").save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def embed_qr_image(message: EmailMessage, contenido: str) -> None:
+    """Embebe el QR en la alternativa HTML como `cid:qr_image`.
+
+    Debe llamarse después de `add_alternative(html)`. Deja la estructura
+    multipart/alternative → multipart/related(type=text/html) → [html, png]:
+    - `type="text/html"` es obligatorio según RFC 2387 y algunos clientes lo
+      usan para ubicar la parte raíz;
+    - `Content-Disposition: inline` con nombre de archivo evita que el cliente
+      lo trate como adjunto genérico y da un nombre legible si el usuario lo
+      guarda.
+    """
+    html_part = message.get_payload()[-1]
+    html_part.add_related(
+        build_qr_png(contenido),
+        maintype="image",
+        subtype="png",
+        cid=f"<{QR_IMAGE_CID}>",
+        filename=QR_IMAGE_FILENAME,
+        disposition="inline",
+    )
+    # Tras add_related, html_part pasa a ser el contenedor multipart/related.
+    html_part.set_param("type", "text/html")
 
 
 class SMTPEmailSender:
@@ -130,16 +185,7 @@ class SMTPEmailSender:
         message.set_content(data.plain_text)
         message.add_alternative(data.html, subtype="html")
         if data.qr_url:
-            html_part = message.get_payload()[-1]
-            qr_image = qrcode.make(data.qr_url)
-            buffer = BytesIO()
-            qr_image.save(buffer, format="PNG")
-            html_part.add_related(
-                buffer.getvalue(),
-                maintype="image",
-                subtype="png",
-                cid="<qr_image>",
-            )
+            embed_qr_image(message, data.qr_url)
         return message
 
     def _build_initial_password_message(
@@ -222,14 +268,7 @@ class SMTPEmailSender:
         message["To"] = data.recipient_email
         message.set_content(plain_text)
         message.add_alternative(html, subtype="html")
-        html_part = message.get_payload()[-1]
-        qr_url = f"{settings.frontend_base_url}/eventos/credencial/{data.codigo_seguro}"
-        qr_image = qrcode.make(qr_url)
-        buffer = BytesIO()
-        qr_image.save(buffer, format="PNG")
-        html_part.add_related(
-            buffer.getvalue(), maintype="image", subtype="png", cid="<qr_image>"
-        )
+        embed_qr_image(message, data.codigo_seguro)
         return message
 
     def _build_codigo_acceso_message(
@@ -258,6 +297,20 @@ class SMTPEmailSender:
         message.add_alternative(html, subtype="html")
         return message
 
+    @staticmethod
+    def _ensure_delivery_headers(message: EmailMessage, sender_email: str) -> None:
+        """Completa `Date` y `Message-ID` si faltan.
+
+        Los filtros antispam penalizan mensajes sin estas cabeceras; y un
+        correo clasificado como spam no muestra ninguna imagen embebida
+        (Gmail las bloquea), así que el QR llega "roto".
+        """
+        if "Date" not in message:
+            message["Date"] = format_datetime(datetime.now(timezone.utc))
+        if "Message-ID" not in message:
+            domain = sender_email.rsplit("@", 1)[-1] if "@" in sender_email else None
+            message["Message-ID"] = make_msgid(domain=domain)
+
     def _send_message(
         self,
         message: EmailMessage,
@@ -284,6 +337,7 @@ class SMTPEmailSender:
                     smtp.starttls(context=ssl.create_default_context())
                     smtp.ehlo()
                 smtp.login(sender_email, password)
+                self._ensure_delivery_headers(message, sender_email)
                 smtp.send_message(message)
         except (OSError, smtplib.SMTPException) as exc:
             raise EmailDeliveryError(

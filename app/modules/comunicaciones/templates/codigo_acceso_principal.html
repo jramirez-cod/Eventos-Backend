@@ -13,7 +13,8 @@
             <tr>
               <td style="padding:24px 32px;background:#17365d;color:#ffffff">
                 <div style="font-size:22px;font-weight:700">Sistema Eventos CODIP</div>
-                <div style="margin-top:6px;font-size:14px">Gestión de participantes de {{ nombre_empresa }}</div>
+                <div style="margin-top:6px;font-size:14px">{{ nombre_evento }}</div>
+                <div style="margin-top:2px;font-size:13px;opacity:.85">Gestión de participantes de {{ nombre_empresa }}</div>
               </td>
             </tr>
             <tr>
@@ -21,7 +22,8 @@
                 <p style="margin:0 0 18px">Hola, {{ recipient_name }}:</p>
                 <p style="margin:0 0 22px;line-height:1.6">
                   Como contacto principal de <strong>{{ nombre_empresa }}</strong>, puedes
-                  elegir e inscribir a los participantes que asistirán. Usa el
+                  elegir e inscribir a los participantes que asistirán a
+                  <strong>{{ nombre_evento }}</strong> ({{ fecha_evento }}). Usa el
                   siguiente código de acceso:
                 </p>
                 <div style="padding:20px;text-align:center;background:#eef2f6;border:1px solid #d7dee7;font-size:28px;font-weight:700;letter-spacing:6px;color:#17365d">
@@ -32,8 +34,10 @@
                 </p>
                 <p style="margin:22px 0 0;line-height:1.6;color:#555">
                   Puedes volver a ingresar con este mismo código las veces que
-                  necesites hasta el día antes del evento. Si no esperabas este
-                  correo, comunícate con el organizador del evento.
+                  necesites. <strong>Vence el {{ expira_en }}.</strong>
+                  Si recibiste varios correos, usa siempre el más reciente: al
+                  generar un código nuevo, el anterior deja de servir.
+                  Si no esperabas este correo, comunícate con el organizador.
                 </p>
               </td>
             </tr>

@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from typing import Any
 
-from sqlalchemy import Select, and_, func, literal, or_, select, update
+from sqlalchemy import Select, and_, case, func, literal, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -12,6 +12,7 @@ from app.modules.empresas.models import Empresa
 from app.modules.eventos.models import (
     DetalleProgramacionEvento,
     Evento,
+    EventoEstado,
     ProgramacionEvento,
 )
 from app.modules.grupos.models import Grupo
@@ -149,9 +150,7 @@ class ParticipanteRepository:
             return None
         if id_programacion_evento is None:
             id_programacion_evento = await self.db.scalar(
-                select(func.min(ProgramacionEvento.id_programacion_evento)).where(
-                    ProgramacionEvento.id_evento == evento_empresa.id_evento
-                )
+                self._programacion_preferida_select(evento_empresa.id_evento)
             )
         evento_empresa.id_programacion_evento = id_programacion_evento
         evento_empresa.id_contacto_principal = await self.db.scalar(
@@ -316,6 +315,30 @@ class ParticipanteRepository:
         )
         return int(await self.db.scalar(stmt) or 0)
 
+    async def get_invitado_duplicado_en_programacion(
+        self,
+        *,
+        id_programacion_evento: int,
+        numero_documento: str | None,
+        correo: str | None,
+    ) -> EventoContacto | None:
+        if numero_documento is None and correo is None:
+            return None
+        condiciones = []
+        if numero_documento is not None:
+            condiciones.append(
+                EventoContacto.invitado_numero_documento == numero_documento
+            )
+        if correo is not None:
+            condiciones.append(EventoContacto.invitado_correo.ilike(correo))
+        stmt = select(EventoContacto).where(
+            EventoContacto.id_programacion_evento == id_programacion_evento,
+            EventoContacto.id_contacto.is_(None),
+            EventoContacto.estado.is_(True),
+            or_(*condiciones),
+        )
+        return await self.db.scalar(stmt)
+
     async def get_evento_contacto_by_id(
         self, id_evento_contacto: int, *, for_update: bool = False
     ) -> EventoContacto | None:
@@ -388,8 +411,9 @@ class ParticipanteRepository:
         programacion_contexto = (
             literal(id_programacion_evento)
             if id_programacion_evento is not None
-            else select(func.min(ProgramacionEvento.id_programacion_evento))
-            .where(ProgramacionEvento.id_evento == EventoEmpresa.id_evento)
+            else ParticipanteRepository._programacion_preferida_select(
+                EventoEmpresa.id_evento
+            )
             .correlate(EventoEmpresa)
             .scalar_subquery()
         )
@@ -607,13 +631,23 @@ class ParticipanteRepository:
         return qr
 
     async def get_participante_qr_by_evento_contacto(
-        self, id_evento_contacto: int
+        self, id_evento_contacto: int, *, solo_activos: bool = True
     ) -> ParticipanteQr | None:
         stmt = select(ParticipanteQr).where(
-            ParticipanteQr.id_evento_contacto == id_evento_contacto,
-            ParticipanteQr.estado.is_(True),
+            ParticipanteQr.id_evento_contacto == id_evento_contacto
         )
+        if solo_activos:
+            stmt = stmt.where(ParticipanteQr.estado.is_(True))
         return await self.db.scalar(stmt)
+
+    async def reactivar_participante_qr(
+        self, qr: ParticipanteQr, *, codigo_seguro: str
+    ) -> ParticipanteQr:
+        qr.codigo_seguro = codigo_seguro
+        qr.estado = True
+        qr.fecha_envio = None
+        await self.db.flush()
+        return qr
 
     async def get_participante_qr_by_codigo(
         self, codigo_seguro: str
@@ -658,6 +692,29 @@ class ParticipanteRepository:
         evento_empresa.id_contacto_principal = id_contacto
         await self.db.flush()
         return evento_empresa
+
+    @staticmethod
+    def _programacion_preferida_select(id_evento: Any) -> Select[Any]:
+        """Programación que representa a una afiliación cuando no se indica una.
+
+        La afiliación se comparte entre todas las programaciones del evento.
+        Antes se tomaba la de menor id (la más antigua): en cuanto esa se
+        finalizaba y se creaba otra, reenviar código, asignar principal o
+        entrar al portal seguían apuntando a la cerrada. Se prefiere la
+        ABIERTA más reciente y, si no hay ninguna abierta, la más reciente.
+        """
+        return (
+            select(ProgramacionEvento.id_programacion_evento)
+            .where(ProgramacionEvento.id_evento == id_evento)
+            .order_by(
+                case(
+                    (ProgramacionEvento.estado == EventoEstado.ABIERTO, 0),
+                    else_=1,
+                ),
+                ProgramacionEvento.id_programacion_evento.desc(),
+            )
+            .limit(1)
+        )
 
     @staticmethod
     def _evento_id_por_programacion(id_programacion_evento: int) -> Any:

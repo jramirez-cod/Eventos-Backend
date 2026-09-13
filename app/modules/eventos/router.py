@@ -217,6 +217,7 @@ async def crear_evento(
 async def listar_programaciones_transversal(
     fecha_desde: date | None = Query(default=None),
     fecha_hasta: date | None = Query(default=None),
+    id_evento: int | None = Query(default=None, gt=0),
     id_empresa: int | None = Query(default=None, gt=0),
     estado: EventoEstado | None = Query(default=None),
     page: int = Query(default=1, ge=1),
@@ -228,6 +229,7 @@ async def listar_programaciones_transversal(
         return await EventoService(db).listar_programaciones_transversal(
             fecha_desde=fecha_desde,
             fecha_hasta=fecha_hasta,
+            id_evento=id_evento,
             id_empresa=id_empresa,
             estado=estado,
             page=page,

@@ -2,6 +2,10 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
+from app.modules.comunicaciones.email_service import (
+    EmailConfigurationError,
+    EmailDeliveryError,
+)
 from app.modules.contactos.service import (
     CargoInactiveError,
     CargoNotFoundError,
@@ -43,17 +47,19 @@ from app.modules.participantes.service import (
     ContactoInactiveError,
     ContactoNotFoundError,
     ContactoPrincipalInvalidoError,
+    CodigoAccesoYaVencidoError,
     ContactoSinEmpresaAfiliadaError,
     CredencialYaImpresaError,
     CupoBeneficioAgotadoError,
     DuplicateEventoContactoError,
     DuplicateEventoEmpresaError,
-    EmailRemitenteNoConfiguradoError,
     EmpresaInactiveError,
     EmpresaNotFoundError,
     EventoContactoNotFoundError,
     EventoEmpresaNotFoundError,
     EventoNotOpenError,
+    InvitadoDatosConflictoError,
+    InvitadoDuplicadoEnProgramacionError,
     InvitadoInvalidoError,
     LimiteInvitadosSuperadoError,
     ParticipanteBeneficioNotFoundError,
@@ -78,7 +84,20 @@ PERMISO_AFILIAR_EMPRESA = "AFILIAR_EMPRESA_EVENTO"
 router = APIRouter(prefix="/participantes", tags=["Participantes"])
 
 
-def _raise_http_error(exc: ParticipanteServiceError | ContactoServiceError) -> None:
+def _raise_http_error(
+    exc: ParticipanteServiceError | ContactoServiceError | EmailDeliveryError,
+) -> None:
+    # El correo se configura desde el módulo de comunicaciones: si falta la
+    # plantilla o el remitente no se puede completar la acción, pero tampoco es
+    # un error del cliente. Se distingue de una caída puntual del SMTP.
+    if isinstance(exc, EmailConfigurationError):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)
+        )
+    if isinstance(exc, EmailDeliveryError):
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)
+        )
     if isinstance(
         exc,
         (
@@ -115,6 +134,9 @@ def _raise_http_error(exc: ParticipanteServiceError | ContactoServiceError) -> N
             CupoBeneficioAgotadoError,
             LimiteInvitadosSuperadoError,
             ProgramacionSinDiasError,
+            CodigoAccesoYaVencidoError,
+            InvitadoDatosConflictoError,
+            InvitadoDuplicadoEnProgramacionError,
         ),
     ):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
@@ -130,7 +152,6 @@ def _raise_http_error(exc: ParticipanteServiceError | ContactoServiceError) -> N
             AsignacionBeneficioGrupoInvalidoError,
             BeneficioNoAplicableError,
             ResponsableInvalidoError,
-            EmailRemitenteNoConfiguradoError,
             ContactoPrincipalInvalidoError,
             InvitadoInvalidoError,
         ),
@@ -190,6 +211,7 @@ async def listar_empresas_programacion(
 async def desafiliar_empresa(
     id_evento_empresa: int = Path(gt=0),
     motivo: str | None = Query(default=None, max_length=500),
+    id_programacion_evento: int | None = Query(default=None, gt=0),
     actor: Usuario = Depends(
         require_permission(MODULO_PARTICIPANTES, PERMISO_AFILIAR_EMPRESA)
     ),
@@ -200,6 +222,7 @@ async def desafiliar_empresa(
             id_evento_empresa=id_evento_empresa,
             motivo=motivo,
             actor=actor,
+            id_programacion_evento=id_programacion_evento,
         )
     except ParticipanteServiceError as exc:
         _raise_http_error(exc)
@@ -213,6 +236,7 @@ async def desafiliar_empresa(
 async def asignar_contacto_principal(
     data: ContactoPrincipalUpdate,
     id_evento_empresa: int = Path(gt=0),
+    id_programacion_evento: int | None = Query(default=None, gt=0),
     actor: Usuario = Depends(
         require_permission(MODULO_PARTICIPANTES, PERMISO_AFILIAR_EMPRESA)
     ),
@@ -223,6 +247,7 @@ async def asignar_contacto_principal(
             id_evento_empresa=id_evento_empresa,
             id_contacto=data.id_contacto,
             actor=actor,
+            id_programacion_evento=id_programacion_evento,
         )
     except ParticipanteServiceError as exc:
         _raise_http_error(exc)
@@ -256,6 +281,7 @@ async def enviar_codigo_acceso_masivo(
 async def reenviar_codigo_acceso(
     data: ReenviarCodigoAccesoRequest,
     id_evento_empresa: int = Path(gt=0),
+    id_programacion_evento: int | None = Query(default=None, gt=0),
     actor: Usuario = Depends(
         require_permission(MODULO_PARTICIPANTES, PERMISO_AFILIAR_EMPRESA)
     ),
@@ -263,9 +289,12 @@ async def reenviar_codigo_acceso(
 ) -> EventoEmpresaResponse:
     try:
         return await ParticipanteService(db).enviar_codigo_acceso(
-            id_evento_empresa=id_evento_empresa, actor=actor, motivo=data.motivo
+            id_evento_empresa=id_evento_empresa,
+            actor=actor,
+            motivo=data.motivo,
+            id_programacion_evento=id_programacion_evento,
         )
-    except ParticipanteServiceError as exc:
+    except (ParticipanteServiceError, EmailDeliveryError) as exc:
         _raise_http_error(exc)
         raise
 
@@ -510,7 +539,7 @@ async def enviar_qr(
         return await ParticipanteService(db).enviar_qr(
             id_evento_contacto=id_evento_contacto, actor=actor
         )
-    except ParticipanteServiceError as exc:
+    except (ParticipanteServiceError, EmailDeliveryError) as exc:
         _raise_http_error(exc)
         raise
 

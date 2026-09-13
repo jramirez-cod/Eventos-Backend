@@ -324,8 +324,11 @@ class EventoRepository:
         estado: EventoEstado | None,
         page: int,
         page_size: int,
+        id_evento: int | None = None,
     ) -> tuple[list[tuple[ProgramacionEvento, Evento, date | None]], int]:
         filters: list[Any] = []
+        if id_evento is not None:
+            filters.append(ProgramacionEvento.id_evento == id_evento)
         if estado is not None:
             filters.append(ProgramacionEvento.estado == estado)
         if fecha_desde is not None or fecha_hasta is not None:

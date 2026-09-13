@@ -115,7 +115,12 @@ async def test_flujo_completo_portal_agrega_existentes_e_invitado(
     invitado = await client.post(
         "/api/v1/portal/invitados",
         headers=portal_headers,
-        json={"nombres": "Visitante", "apellidos": "Externo"},
+        json={
+            "nombres": "Visitante",
+            "apellidos": "Externo",
+            "numero_documento": "INVPORTAL1",
+            "correo": "visitante.portal@example.com",
+        },
     )
     assert invitado.status_code == 201, invitado.text
     assert invitado.json()["es_invitado"] is True

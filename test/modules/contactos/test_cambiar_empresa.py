@@ -23,6 +23,7 @@ async def test_cambiar_empresa_conserva_historial_y_una_sola_vigencia(
         contacto = await create_contacto(
             session, empresa=origen, actor=actor, sequence=10
         )
+        contacto.es_contacto_principal = True
         await session.commit()
         id_contacto = contacto.id_contacto
         id_origen = origen.id_empresa
@@ -56,6 +57,7 @@ async def test_cambiar_empresa_conserva_historial_y_una_sola_vigencia(
 
     assert stored is not None
     assert stored.id_empresa == id_destino
+    assert stored.es_contacto_principal is False
     assert len(historiales) == 2
     historial_origen = next(h for h in historiales if h.id_empresa == id_origen)
     historial_destino = next(h for h in historiales if h.id_empresa == id_destino)

@@ -154,3 +154,43 @@ async def test_listado_transversal_paginado(client, session_factory) -> None:
     assert body["pages"] == 2
     assert body["page"] == 2
     assert len(body["items"]) == 1
+
+
+async def test_listado_transversal_filtra_por_evento(client, session_factory) -> None:
+    async with session_factory() as session:
+        _, headers = await seed_event_actor(session)
+
+    evento_a = await crear_evento_http(
+        client, headers, session_factory, nombre_evento="Evento con programación"
+    )
+    evento_b = await crear_evento_http(
+        client, headers, session_factory, nombre_evento="Evento sin programación"
+    )
+    propia = await crear_programacion_http(
+        client, headers, id_evento=evento_a["id_evento"], inicio_dias=5, fin_dias=6
+    )
+
+    response = await client.get(
+        "/api/v1/eventos/programaciones",
+        headers=headers,
+        params={"id_evento": evento_a["id_evento"]},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["total"] == 1
+    assert body["items"][0]["id_programacion_evento"] == propia["id_programacion_evento"]
+    assert body["items"][0]["nombre_evento"] == "Evento con programación"
+
+    response = await client.get(
+        "/api/v1/eventos/programaciones",
+        headers=headers,
+        params={"id_evento": evento_b["id_evento"]},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["total"] == 0
+    assert response.json()["items"] == []
+
+    response = await client.get(
+        "/api/v1/eventos/programaciones", headers=headers, params={"id_evento": 0}
+    )
+    assert response.status_code == 422

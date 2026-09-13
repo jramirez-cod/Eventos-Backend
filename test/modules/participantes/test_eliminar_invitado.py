@@ -23,8 +23,8 @@ async def test_eliminar_invitado_sin_registrar(client, session_factory) -> None:
         json={
             "nombres": "Invitado",
             "apellidos": "Suelto",
-            "numero_documento": None,
-            "correo": None,
+            "numero_documento": "INV00001",
+            "correo": "invitado.eliminar@example.com",
             "celular": None,
         },
     )

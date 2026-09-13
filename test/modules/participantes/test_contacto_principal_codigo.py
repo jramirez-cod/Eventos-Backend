@@ -1,9 +1,11 @@
-from datetime import date, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import pytest
 from sqlalchemy import select
 
 from app.modules.contactos.models import Contacto
+from app.modules.eventos.models import DetalleProgramacionEvento
 from app.modules.participantes.models import CodigoAccesoPrincipal, ParticipanteQr
 from test.modules.contactos.conftest import create_contacto
 from test.modules.participantes.conftest import evento_contacto_context
@@ -128,8 +130,67 @@ async def test_codigo_expira_un_dia_antes_del_primer_dia(
             )
         )
         assert codigo is not None
-        expira_en_utc = codigo.expira_en.astimezone(timezone.utc)
-        assert expira_en_utc.date() == date.today() + timedelta(days=9)
+        expira_en_lima = codigo.expira_en.astimezone(ZoneInfo("America/Lima"))
+        assert expira_en_lima.date() == date.today() + timedelta(days=10)
+        assert expira_en_lima.time() == time(18, 0)
+
+
+async def test_codigo_creado_para_evento_de_manana_no_nace_expirado(
+    client, session_factory, monkeypatch
+) -> None:
+    codigo_plano = "ABCD1234"
+    monkeypatch.setattr(
+        "app.modules.participantes.service.generate_portal_code",
+        lambda: codigo_plano,
+    )
+    async with session_factory() as session:
+        _, headers, programacion, _, contacto, afiliacion = (
+            await evento_contacto_context(session, client)
+        )
+        dia = await session.scalar(
+            select(DetalleProgramacionEvento).where(
+                DetalleProgramacionEvento.id_programacion_evento
+                == programacion.id_programacion_evento
+            )
+        )
+        assert dia is not None
+        dia.fecha = datetime.now(ZoneInfo("America/Lima")).date() + timedelta(days=1)
+        await session.commit()
+
+    id_evento_empresa = afiliacion["id_evento_empresa"]
+    principal = await client.patch(
+        f"/api/v1/participantes/empresas/{id_evento_empresa}/contacto-principal",
+        headers=headers,
+        json={"id_contacto": contacto.id_contacto},
+    )
+    assert principal.status_code == 200, principal.text
+
+    envio = await client.post(
+        f"/api/v1/participantes/empresas/{id_evento_empresa}/reenviar-codigo",
+        headers=headers,
+        json={},
+    )
+    assert envio.status_code == 200, envio.text
+
+    validacion = await client.post(
+        "/api/v1/portal/validar-codigo",
+        json={"codigo": codigo_plano},
+    )
+    assert validacion.status_code == 200, validacion.text
+
+    async with session_factory() as session:
+        codigo = await session.scalar(
+            select(CodigoAccesoPrincipal).where(
+                CodigoAccesoPrincipal.id_evento_empresa == id_evento_empresa,
+                CodigoAccesoPrincipal.estado.is_(True),
+            )
+        )
+        assert codigo is not None
+        expira_en_lima = codigo.expira_en.astimezone(ZoneInfo("America/Lima"))
+        assert expira_en_lima.date() == datetime.now(
+            ZoneInfo("America/Lima")
+        ).date() + timedelta(days=1)
+        assert expira_en_lima.time() == time(18, 0)
 
 
 async def test_invitado_sin_registrar_no_crea_contacto_y_respeta_limite(
@@ -149,13 +210,13 @@ async def test_invitado_sin_registrar_no_crea_contacto_y_respeta_limite(
             f"/api/v1/participantes/programaciones/{programacion.id_programacion_evento}"
             f"/empresas/{empresa.id_empresa}/invitados",
             headers=headers,
-            json={
-                "nombres": f"Invitado{i}",
-                "apellidos": "Prueba",
-                "numero_documento": None,
-                "correo": None,
-                "celular": None,
-            },
+                json={
+                    "nombres": f"Invitado{i}",
+                    "apellidos": "Prueba",
+                    "numero_documento": f"INV{i:05d}",
+                    "correo": f"invitado{i}@example.com",
+                    "celular": None,
+                },
         )
         assert response.status_code == 201, response.text
         assert response.json()["es_invitado"] is True
@@ -165,7 +226,12 @@ async def test_invitado_sin_registrar_no_crea_contacto_y_respeta_limite(
         f"/api/v1/participantes/programaciones/{programacion.id_programacion_evento}"
         f"/empresas/{empresa.id_empresa}/invitados",
         headers=headers,
-        json={"nombres": "Uno mas", "apellidos": "Prueba"},
+        json={
+            "nombres": "Uno mas",
+            "apellidos": "Prueba",
+            "numero_documento": "INV99999",
+            "correo": "invitado-limite@example.com",
+        },
     )
     assert limite.status_code == 409, limite.text
 
@@ -217,3 +283,127 @@ async def test_desactivar_evento_contacto_invalida_qr_activo(
             )
         )
         assert qr is not None and qr.estado is False
+
+
+async def test_codigo_para_evento_de_hoy_sirve_hasta_que_termina_el_dia(
+    client, session_factory, monkeypatch
+) -> None:
+    """Caso real: evento creado para hoy mismo (p. ej. de 13:00 a 14:00).
+
+    Con la regla anterior (vencer el día previo) el código nacía vencido y el
+    portal lo rechazaba, dejando sin portal a cualquier evento creado con poca
+    antelación. La hora de fin se calcula desde "ahora" para que la prueba no
+    dependa de la hora en que se ejecute.
+    """
+    codigo_plano = "HOY12345"
+    monkeypatch.setattr(
+        "app.modules.participantes.service.generate_portal_code",
+        lambda: codigo_plano,
+    )
+
+    ahora_lima = datetime.now(ZoneInfo("America/Lima"))
+    hoy = ahora_lima.date()
+    # Ventana que siempre termina más tarde que "ahora", sin cruzar la medianoche.
+    hora_fin = time(23, 59) if ahora_lima.hour >= 22 else time(ahora_lima.hour + 1, 0)
+    hora_inicio = time(ahora_lima.hour, 0)
+
+    async with session_factory() as session:
+        _, headers, programacion, _, contacto, afiliacion = (
+            await evento_contacto_context(session, client)
+        )
+        await session.commit()
+
+    async with session_factory() as session:
+        dia = await session.scalar(
+            select(DetalleProgramacionEvento).where(
+                DetalleProgramacionEvento.id_programacion_evento
+                == programacion.id_programacion_evento
+            )
+        )
+        assert dia is not None
+        dia.fecha = hoy
+        dia.hora_inicio = hora_inicio
+        dia.hora_fin = hora_fin
+        await session.commit()
+
+    id_evento_empresa = afiliacion["id_evento_empresa"]
+    principal = await client.patch(
+        f"/api/v1/participantes/empresas/{id_evento_empresa}/contacto-principal",
+        headers=headers,
+        json={"id_contacto": contacto.id_contacto},
+    )
+    assert principal.status_code == 200, principal.text
+
+    envio = await client.post(
+        f"/api/v1/participantes/empresas/{id_evento_empresa}/reenviar-codigo",
+        headers=headers,
+        json={},
+    )
+    assert envio.status_code == 200, envio.text
+
+    # El contacto principal puede usarlo de inmediato.
+    validacion = await client.post(
+        "/api/v1/portal/validar-codigo",
+        json={"codigo": codigo_plano},
+    )
+    assert validacion.status_code == 200, validacion.text
+
+    async with session_factory() as session:
+        codigo = await session.scalar(
+            select(CodigoAccesoPrincipal).where(
+                CodigoAccesoPrincipal.id_evento_empresa == id_evento_empresa,
+                CodigoAccesoPrincipal.estado.is_(True),
+            )
+        )
+        assert codigo is not None
+        expira_en_lima = codigo.expira_en.astimezone(ZoneInfo("America/Lima"))
+        assert expira_en_lima.date() == hoy
+        assert expira_en_lima.time() == hora_fin
+
+
+async def test_codigo_usa_fin_del_dia_cuando_el_dia_no_tiene_hora_fin(
+    client, session_factory
+) -> None:
+    """hora_fin es opcional en el modelo: sin ella se usa el fin del día."""
+    async with session_factory() as session:
+        _, headers, programacion, _, contacto, afiliacion = (
+            await evento_contacto_context(session, client)
+        )
+        await session.commit()
+
+    async with session_factory() as session:
+        dia = await session.scalar(
+            select(DetalleProgramacionEvento).where(
+                DetalleProgramacionEvento.id_programacion_evento
+                == programacion.id_programacion_evento
+            )
+        )
+        assert dia is not None
+        dia.hora_fin = None
+        fecha_dia = dia.fecha
+        await session.commit()
+
+    id_evento_empresa = afiliacion["id_evento_empresa"]
+    await client.patch(
+        f"/api/v1/participantes/empresas/{id_evento_empresa}/contacto-principal",
+        headers=headers,
+        json={"id_contacto": contacto.id_contacto},
+    )
+    envio = await client.post(
+        f"/api/v1/participantes/empresas/{id_evento_empresa}/reenviar-codigo",
+        headers=headers,
+        json={},
+    )
+    assert envio.status_code == 200, envio.text
+
+    async with session_factory() as session:
+        codigo = await session.scalar(
+            select(CodigoAccesoPrincipal).where(
+                CodigoAccesoPrincipal.id_evento_empresa == id_evento_empresa,
+                CodigoAccesoPrincipal.estado.is_(True),
+            )
+        )
+        assert codigo is not None
+        expira_en_lima = codigo.expira_en.astimezone(ZoneInfo("America/Lima"))
+        assert expira_en_lima.date() == fecha_dia
+        assert expira_en_lima.time() == time.max

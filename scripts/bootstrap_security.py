@@ -9,7 +9,7 @@ import sys
 if sys.platform == 'win32':
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
-from sqlalchemy import inspect, select
+from sqlalchemy import func, inspect, select
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -34,7 +34,7 @@ from app.modules.usuarios.models import (  # noqa: E402
 
 ROLE_ADMIN = "ADMINISTRADOR_EVENTOS"
 ROLE_USER = "PERSONAL_EVENTOS"
-MODULE_USUARIOS = "usuarios"
+MODULE_USUARIOS = "USUARIOS"
 PERMISSIONS_USUARIOS = ("CREAR_USUARIO", "INACTIVAR_USUARIO", "ACTUALIZAR_USUARIO")
 MODULO_GRUPOS = "GRUPOS"
 PERMISOS_GRUPOS = ("CREAR_GRUPO", "INACTIVAR_GRUPO")
@@ -89,7 +89,20 @@ PERMISOS_COMUNICACIONES = (
 TIPO_DOCUMENTO_DNI = "DNI"
 TIPO_DOCUMENTO_DNI_LONGITUD = 8
 CATEGORIA_SIN_CATEGORIA = "Sin categoría"
+CATEGORIAS_DEFECTO = ("A", "B", "C")
 BENEFICIO_SIN_BENEFICIO = "Sin beneficio"
+BENEFICIOS_DEFECTO = (
+    {
+        "nombre": "Entrada gratuita",
+        "tipo_calculo": "POR_EVENTO",
+        "personas_por_asignacion": 1,
+    },
+    {
+        "nombre": "Entrada doble",
+        "tipo_calculo": "POR_ANIO",
+        "personas_por_asignacion": 2,
+    },
+)
 REQUIRED_TABLES = {
     "rol",
     "usuario",
@@ -178,7 +191,11 @@ async def _get_or_create_tipo_documento(nombre_documento: str, *, longitud: int)
         return tipo_documento
 
 
-async def _get_or_create_categoria(nombre_categoria: str) -> Categoria:
+async def _get_or_create_categoria(
+    nombre_categoria: str,
+    *,
+    descripcion: str | None = None,
+) -> Categoria:
     async with AsyncSessionLocal() as session:
         categoria = await session.scalar(
             select(Categoria).where(Categoria.nombre_categoria == nombre_categoria)
@@ -186,7 +203,7 @@ async def _get_or_create_categoria(nombre_categoria: str) -> Categoria:
         if categoria is None:
             categoria = Categoria(
                 nombre_categoria=nombre_categoria,
-                descripcion="Categoría por defecto para grupos sin clasificar",
+                descripcion=descripcion,
                 estado=True,
             )
             session.add(categoria)
@@ -199,7 +216,13 @@ async def _get_or_create_categoria(nombre_categoria: str) -> Categoria:
         return categoria
 
 
-async def _get_or_create_beneficio(nombre: str) -> Beneficio:
+async def _get_or_create_beneficio(
+    nombre: str,
+    *,
+    tipo_calculo: TipoCalculoBeneficio = TipoCalculoBeneficio.SIN_BENEFICIO,
+    personas_por_asignacion: int = 1,
+    condicion: str | None = None,
+) -> Beneficio:
     async with AsyncSessionLocal() as session:
         beneficio = await session.scalar(
             select(Beneficio).where(Beneficio.nombre == nombre)
@@ -207,9 +230,9 @@ async def _get_or_create_beneficio(nombre: str) -> Beneficio:
         if beneficio is None:
             beneficio = Beneficio(
                 nombre=nombre,
-                condicion=None,
-                tipo_calculo=TipoCalculoBeneficio.SIN_BENEFICIO,
-                personas_por_asignacion=1,
+                condicion=condicion,
+                tipo_calculo=tipo_calculo,
+                personas_por_asignacion=personas_por_asignacion,
                 estado=True,
             )
             session.add(beneficio)
@@ -225,7 +248,9 @@ async def _get_or_create_beneficio(nombre: str) -> Beneficio:
 async def _get_or_create_module(nombre_modulo: str, *, descripcion: str) -> Modulo:
     async with AsyncSessionLocal() as session:
         modulo = await session.scalar(
-            select(Modulo).where(Modulo.nombre_modulo == nombre_modulo)
+            select(Modulo).where(
+                func.upper(Modulo.nombre_modulo) == nombre_modulo.upper()
+            )
         )
         if modulo is None:
             modulo = Modulo(
@@ -454,8 +479,19 @@ async def bootstrap(args: argparse.Namespace) -> None:
     tipo_documento_dni = await _get_or_create_tipo_documento(
         TIPO_DOCUMENTO_DNI, longitud=TIPO_DOCUMENTO_DNI_LONGITUD
     )
-    await _get_or_create_categoria(CATEGORIA_SIN_CATEGORIA)
+    await _get_or_create_categoria(
+        CATEGORIA_SIN_CATEGORIA,
+        descripcion="Categoría por defecto para grupos sin clasificar",
+    )
+    for nombre_categoria in CATEGORIAS_DEFECTO:
+        await _get_or_create_categoria(nombre_categoria)
     await _get_or_create_beneficio(BENEFICIO_SIN_BENEFICIO)
+    for beneficio_defecto in BENEFICIOS_DEFECTO:
+        await _get_or_create_beneficio(
+            beneficio_defecto["nombre"],
+            tipo_calculo=TipoCalculoBeneficio(beneficio_defecto["tipo_calculo"]),
+            personas_por_asignacion=beneficio_defecto["personas_por_asignacion"],
+        )
     existing_admin = await _get_existing_admin_user(rol=admin_role)
 
     # Usuarios: crear/inactivar cuentas queda reservado al administrador.

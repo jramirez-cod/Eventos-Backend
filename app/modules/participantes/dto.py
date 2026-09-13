@@ -1,9 +1,13 @@
 from datetime import datetime
+import re
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 from app.modules.contactos.dto import ContactoCreate
+from app.modules.contactos.service import InvalidPhoneError, normalize_phone
 from app.modules.maestros.models import TipoCalculoBeneficio
+
+_NUMERO_DOCUMENTO_INVITADO_RE = re.compile(r"^[A-Za-z0-9]{6,15}$")
 
 
 class EventoEmpresaCreate(BaseModel):
@@ -33,9 +37,35 @@ class ContactoPrincipalUpdate(BaseModel):
 class InvitadoCreate(BaseModel):
     nombres: str = Field(min_length=1, max_length=120)
     apellidos: str = Field(min_length=1, max_length=120)
-    numero_documento: str | None = Field(default=None, max_length=50)
-    correo: str | None = Field(default=None, max_length=254)
+    numero_documento: str = Field(min_length=1, max_length=50)
+    correo: EmailStr
     celular: str | None = Field(default=None, max_length=20)
+    id_beneficio: int | None = Field(default=None, gt=0)
+
+    @field_validator("nombres", "apellidos", "numero_documento", mode="before")
+    @classmethod
+    def limpiar_texto(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
+
+    @field_validator("numero_documento")
+    @classmethod
+    def validar_numero_documento(cls, value: str) -> str:
+        if not _NUMERO_DOCUMENTO_INVITADO_RE.fullmatch(value):
+            raise ValueError(
+                "El número de documento debe tener entre 6 y 15 caracteres "
+                "alfanuméricos, sin espacios ni símbolos."
+            )
+        return value
+
+    @field_validator("celular")
+    @classmethod
+    def validar_celular(cls, value: str | None) -> str | None:
+        if value is None or value == "":
+            return None
+        try:
+            return normalize_phone(value)
+        except InvalidPhoneError as exc:
+            raise ValueError(str(exc)) from exc
 
 
 class EstadoEventoContactoUpdate(BaseModel):

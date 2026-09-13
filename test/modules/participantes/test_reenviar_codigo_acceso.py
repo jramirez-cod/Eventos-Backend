@@ -96,3 +96,65 @@ async def test_reenviar_codigo_sin_contacto_principal_recibe_400(
         json={},
     )
     assert respuesta.status_code == 400, respuesta.text
+
+
+async def test_no_envia_codigo_si_el_primer_dia_ya_termino(
+    client, session_factory
+) -> None:
+    """Un código para un día ya terminado nace vencido: avisar, no enviarlo.
+
+    El portal lo rechazaría al validarlo, así que el contacto recibiría un
+    correo con un código muerto y sin explicación.
+    """
+    from datetime import date, timedelta
+
+    from sqlalchemy import update
+
+    from app.modules.eventos.models import DetalleProgramacionEvento
+
+    async with session_factory() as session:
+        _, headers, programacion, _, contacto, afiliacion = (
+            await evento_contacto_context(session, client)
+        )
+        await session.commit()
+
+    id_evento_empresa = afiliacion["id_evento_empresa"]
+    respuesta = await client.patch(
+        f"/api/v1/participantes/empresas/{id_evento_empresa}/contacto-principal",
+        headers=headers,
+        json={"id_contacto": contacto.id_contacto},
+    )
+    assert respuesta.status_code == 200, respuesta.text
+
+    async with session_factory() as session:
+        await session.execute(
+            update(DetalleProgramacionEvento)
+            .where(
+                DetalleProgramacionEvento.id_programacion_evento
+                == programacion.id_programacion_evento
+            )
+            .values(fecha=date.today() - timedelta(days=3))
+        )
+        await session.commit()
+
+    envio = await client.post(
+        f"/api/v1/participantes/empresas/{id_evento_empresa}/reenviar-codigo",
+        headers=headers,
+        json={"motivo": "prueba"},
+    )
+
+    assert envio.status_code == 409, envio.text
+    assert "ya terminó" in envio.json()["detail"]
+
+    async with session_factory() as session:
+        vigentes = list(
+            (
+                await session.scalars(
+                    select(CodigoAccesoPrincipal).where(
+                        CodigoAccesoPrincipal.id_evento_empresa == id_evento_empresa,
+                        CodigoAccesoPrincipal.estado.is_(True),
+                    )
+                )
+            ).all()
+        )
+        assert vigentes == []
