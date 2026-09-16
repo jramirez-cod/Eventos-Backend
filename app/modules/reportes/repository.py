@@ -33,7 +33,7 @@ from app.modules.eventos.models import (
     ResponsableEvento,
 )
 from app.modules.grupos.models import Grupo
-from app.modules.maestros.models import Area, Beneficio, Cargo
+from app.modules.maestros.models import Area, Beneficio, Cargo, TipoCalculoBeneficio
 from app.modules.participantes.models import (
     AsignacionBeneficio,
     EventoContacto,
@@ -1502,3 +1502,107 @@ class ReporteRepository:
             )
         )
         return [dict(row) for row in (await self.db.execute(stmt)).mappings()]
+
+    # -- Cupos "por año" (todas las empresas, todos los eventos) ----------
+
+    async def list_afiliaciones_activas_todos_eventos(self) -> list[Any]:
+        """Empresas activamente afiliadas a alguna programación, agrupadas
+        por evento (una fila por combinación evento+empresa+categoría)."""
+        stmt = (
+            select(
+                Evento.id_evento,
+                Evento.nombre_evento,
+                Evento.estado,
+                Empresa.id_empresa,
+                Empresa.nombre_empresa,
+                Empresa.ruc,
+                Categoria.id_categoria,
+                Categoria.nombre_categoria,
+            )
+            .distinct()
+            .select_from(EventoEmpresa)
+            .join(
+                ProgramacionEvento,
+                ProgramacionEvento.id_programacion_evento
+                == EventoEmpresa.id_programacion_evento,
+            )
+            .join(Evento, Evento.id_evento == ProgramacionEvento.id_evento)
+            .join(Empresa, Empresa.id_empresa == EventoEmpresa.id_empresa)
+            .join(
+                DetalleCategoria,
+                DetalleCategoria.id_detalle_categoria
+                == Empresa.id_detalle_categoria,
+            )
+            .join(Categoria, Categoria.id_categoria == DetalleCategoria.id_categoria)
+            .where(EventoEmpresa.estado.is_(True))
+        )
+        return (await self.db.execute(stmt)).all()
+
+    async def list_politica_por_anio_todos_eventos(self) -> list[Any]:
+        """Configuración de beneficios 'por año' por evento y categoría."""
+        stmt = (
+            select(
+                Evento.id_evento,
+                DetallePoliticaEvento.id_categoria,
+                Beneficio.id_beneficio,
+                Beneficio.nombre,
+                Beneficio.personas_por_asignacion,
+                DetallePoliticaEvento.entradas_gratuitas,
+            )
+            .select_from(DetallePoliticaEvento)
+            .join(Beneficio, Beneficio.id_beneficio == DetallePoliticaEvento.id_beneficio)
+            .join(
+                PoliticaEvento,
+                PoliticaEvento.id_politica_evento
+                == DetallePoliticaEvento.id_politica_evento,
+            )
+            .join(Evento, Evento.id_politica_evento == PoliticaEvento.id_politica_evento)
+            .where(Beneficio.tipo_calculo == TipoCalculoBeneficio.POR_ANIO)
+        )
+        return (await self.db.execute(stmt)).all()
+
+    async def list_asignaciones_por_anio_todos_eventos(self) -> list[Any]:
+        """Asignaciones usadas de beneficios 'por año', ya filtradas a los
+        días dentro del rango de la política del evento correspondiente."""
+        dentro_de_rango = (
+            select(DetalleProgramacionEvento.id_detalle_programacion)
+            .where(
+                DetalleProgramacionEvento.id_programacion_evento
+                == EventoContacto.id_programacion_evento,
+                DetalleProgramacionEvento.fecha >= PoliticaEvento.fecha_inicio,
+                DetalleProgramacionEvento.fecha <= PoliticaEvento.fecha_fin,
+            )
+            .exists()
+        )
+        stmt = (
+            select(
+                Evento.id_evento,
+                EventoContacto.id_empresa,
+                AsignacionBeneficio.id_beneficio,
+                AsignacionBeneficio.id_asignacion_beneficio,
+                AsignacionBeneficio.codigo_grupo,
+                EventoContacto.asistencia_evento,
+            )
+            .select_from(AsignacionBeneficio)
+            .join(
+                EventoContacto,
+                EventoContacto.id_evento_contacto
+                == AsignacionBeneficio.id_evento_contacto,
+            )
+            .join(
+                ProgramacionEvento,
+                ProgramacionEvento.id_programacion_evento
+                == EventoContacto.id_programacion_evento,
+            )
+            .join(Evento, Evento.id_evento == ProgramacionEvento.id_evento)
+            .join(
+                PoliticaEvento,
+                PoliticaEvento.id_politica_evento == Evento.id_politica_evento,
+            )
+            .join(Beneficio, Beneficio.id_beneficio == AsignacionBeneficio.id_beneficio)
+            .where(
+                Beneficio.tipo_calculo == TipoCalculoBeneficio.POR_ANIO,
+                dentro_de_rango,
+            )
+        )
+        return (await self.db.execute(stmt)).all()
