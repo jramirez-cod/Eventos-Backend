@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from typing import Any
 
-from sqlalchemy import Select, and_, case, func, literal, or_, select, update
+from sqlalchemy import Select, and_, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -12,7 +12,6 @@ from app.modules.empresas.models import Empresa
 from app.modules.eventos.models import (
     DetalleProgramacionEvento,
     Evento,
-    EventoEstado,
     ProgramacionEvento,
 )
 from app.modules.grupos.models import Grupo
@@ -93,13 +92,11 @@ class ParticipanteRepository:
         self, *, id_programacion_evento: int, id_empresa: int
     ) -> EventoEmpresa | None:
         stmt = select(EventoEmpresa).where(
-            EventoEmpresa.id_evento
-            == self._evento_id_por_programacion(id_programacion_evento),
+            EventoEmpresa.id_programacion_evento == id_programacion_evento,
             EventoEmpresa.id_empresa == id_empresa,
         )
         evento_empresa = await self.db.scalar(stmt)
         if evento_empresa is not None:
-            evento_empresa.id_programacion_evento = id_programacion_evento
             evento_empresa.id_contacto_principal = await self.db.scalar(
                 select(Contacto.id_contacto).where(
                     Contacto.id_empresa == evento_empresa.id_empresa,
@@ -112,14 +109,12 @@ class ParticipanteRepository:
         self, *, id_programacion_evento: int, id_empresa: int
     ) -> EventoEmpresa | None:
         stmt = select(EventoEmpresa).where(
-            EventoEmpresa.id_evento
-            == self._evento_id_por_programacion(id_programacion_evento),
+            EventoEmpresa.id_programacion_evento == id_programacion_evento,
             EventoEmpresa.id_empresa == id_empresa,
             EventoEmpresa.estado.is_(True),
         )
         evento_empresa = await self.db.scalar(stmt)
         if evento_empresa is not None:
-            evento_empresa.id_programacion_evento = id_programacion_evento
             evento_empresa.id_contacto_principal = await self.db.scalar(
                 select(Contacto.id_contacto).where(
                     Contacto.id_empresa == evento_empresa.id_empresa,
@@ -140,19 +135,13 @@ class ParticipanteRepository:
         )
         if id_programacion_evento is not None:
             stmt = stmt.where(
-                EventoEmpresa.id_evento
-                == self._evento_id_por_programacion(id_programacion_evento)
+                EventoEmpresa.id_programacion_evento == id_programacion_evento
             )
         if for_update:
             stmt = stmt.with_for_update()
         evento_empresa = await self.db.scalar(stmt)
         if evento_empresa is None:
             return None
-        if id_programacion_evento is None:
-            id_programacion_evento = await self.db.scalar(
-                self._programacion_preferida_select(evento_empresa.id_evento)
-            )
-        evento_empresa.id_programacion_evento = id_programacion_evento
         evento_empresa.id_contacto_principal = await self.db.scalar(
             select(Contacto.id_contacto).where(
                 Contacto.id_empresa == evento_empresa.id_empresa,
@@ -162,25 +151,15 @@ class ParticipanteRepository:
         return evento_empresa
 
     async def create_evento_empresa(
-        self, *, id_programacion_evento: int, id_empresa: int, creado_por: int
+        self, *, id_programacion_evento: int, id_empresa: int
     ) -> EventoEmpresa:
-        id_evento = await self.db.scalar(
-            select(ProgramacionEvento.id_evento).where(
-                ProgramacionEvento.id_programacion_evento
-                == id_programacion_evento
-            )
-        )
-        if id_evento is None:
-            raise ValueError("La programación no existe.")
         evento_empresa = EventoEmpresa(
-            id_evento=id_evento,
+            id_programacion_evento=id_programacion_evento,
             id_empresa=id_empresa,
             estado=True,
-            creado_por=creado_por,
         )
         self.db.add(evento_empresa)
         await self.db.flush()
-        evento_empresa.id_programacion_evento = id_programacion_evento
         evento_empresa.id_contacto_principal = None
         return evento_empresa
 
@@ -194,19 +173,10 @@ class ParticipanteRepository:
     async def list_evento_contactos_activos_por_empresa(
         self, *, id_programacion_evento: int, id_empresa: int
     ) -> list[EventoContacto]:
-        stmt = (
-            select(EventoContacto)
-            .join(
-                ProgramacionEvento,
-                ProgramacionEvento.id_programacion_evento
-                == EventoContacto.id_programacion_evento,
-            )
-            .where(
-                ProgramacionEvento.id_evento
-                == self._evento_id_por_programacion(id_programacion_evento),
-                EventoContacto.id_empresa == id_empresa,
-                EventoContacto.estado.is_(True),
-            )
+        stmt = select(EventoContacto).where(
+            EventoContacto.id_programacion_evento == id_programacion_evento,
+            EventoContacto.id_empresa == id_empresa,
+            EventoContacto.estado.is_(True),
         )
         return list((await self.db.scalars(stmt)).all())
 
@@ -221,8 +191,7 @@ class ParticipanteRepository:
 
     async def list_ids_evento_empresa(self, id_programacion_evento: int) -> list[int]:
         stmt = select(EventoEmpresa.id_evento_empresa).where(
-            EventoEmpresa.id_evento
-            == self._evento_id_por_programacion(id_programacion_evento),
+            EventoEmpresa.id_programacion_evento == id_programacion_evento,
             EventoEmpresa.estado.is_(True),
         )
         return list((await self.db.scalars(stmt)).all())
@@ -233,8 +202,7 @@ class ParticipanteRepository:
         stmt = (
             self._evento_empresa_select(id_programacion_evento)
             .where(
-                EventoEmpresa.id_evento
-                == self._evento_id_por_programacion(id_programacion_evento),
+                EventoEmpresa.id_programacion_evento == id_programacion_evento,
                 EventoEmpresa.estado.is_(True),
             )
             .order_by(Empresa.nombre_empresa, EventoEmpresa.id_evento_empresa)
@@ -408,19 +376,10 @@ class ParticipanteRepository:
         id_programacion_evento: int | None = None,
     ) -> Select[Any]:
         principal = aliased(Contacto)
-        programacion_contexto = (
-            literal(id_programacion_evento)
-            if id_programacion_evento is not None
-            else ParticipanteRepository._programacion_preferida_select(
-                EventoEmpresa.id_evento
-            )
-            .correlate(EventoEmpresa)
-            .scalar_subquery()
-        )
         return (
             select(
                 EventoEmpresa,
-                programacion_contexto.label("id_programacion_evento"),
+                EventoEmpresa.id_programacion_evento.label("id_programacion_evento"),
                 Empresa,
                 Grupo,
                 Categoria,
@@ -692,40 +651,6 @@ class ParticipanteRepository:
         evento_empresa.id_contacto_principal = id_contacto
         await self.db.flush()
         return evento_empresa
-
-    @staticmethod
-    def _programacion_preferida_select(id_evento: Any) -> Select[Any]:
-        """Programación que representa a una afiliación cuando no se indica una.
-
-        La afiliación se comparte entre todas las programaciones del evento.
-        Antes se tomaba la de menor id (la más antigua): en cuanto esa se
-        finalizaba y se creaba otra, reenviar código, asignar principal o
-        entrar al portal seguían apuntando a la cerrada. Se prefiere la
-        ABIERTA más reciente y, si no hay ninguna abierta, la más reciente.
-        """
-        return (
-            select(ProgramacionEvento.id_programacion_evento)
-            .where(ProgramacionEvento.id_evento == id_evento)
-            .order_by(
-                case(
-                    (ProgramacionEvento.estado == EventoEstado.ABIERTO, 0),
-                    else_=1,
-                ),
-                ProgramacionEvento.id_programacion_evento.desc(),
-            )
-            .limit(1)
-        )
-
-    @staticmethod
-    def _evento_id_por_programacion(id_programacion_evento: int) -> Any:
-        return (
-            select(ProgramacionEvento.id_evento)
-            .where(
-                ProgramacionEvento.id_programacion_evento
-                == id_programacion_evento
-            )
-            .scalar_subquery()
-        )
 
     # -- CodigoAccesoPrincipal ---------------------------------------------
 

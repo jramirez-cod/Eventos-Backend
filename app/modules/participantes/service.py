@@ -233,7 +233,6 @@ class ParticipanteService:
                 evento_empresa = await self.participantes.create_evento_empresa(
                     id_programacion_evento=id_programacion_evento,
                     id_empresa=id_empresa,
-                    creado_por=actor.id_usuario,
                 )
                 accion = "AFILIAR_EMPRESA_EVENTO"
             contacto_principal = await self.contactos.contactos.get_contacto_principal(
@@ -1529,7 +1528,6 @@ class ParticipanteService:
     def _evento_empresa_values(evento_empresa: EventoEmpresa) -> dict[str, Any]:
         return {
             "id_evento_empresa": evento_empresa.id_evento_empresa,
-            "id_evento": evento_empresa.id_evento,
             "id_programacion_evento": evento_empresa.id_programacion_evento,
             "id_empresa": evento_empresa.id_empresa,
             "id_contacto_principal": evento_empresa.id_contacto_principal,

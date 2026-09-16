@@ -301,7 +301,7 @@ class ReporteRepository:
         )
         conditions = [
             *self._program_conditions(id_evento, filtros),
-            EventoEmpresa.id_evento == id_evento,
+            ProgramacionEvento.id_evento == id_evento,
         ]
         if filtros.alcance == ReporteAlcance.VIGENTE:
             conditions.append(EventoEmpresa.estado.is_(True))
@@ -369,7 +369,8 @@ class ReporteRepository:
             .select_from(EventoEmpresa)
             .join(
                 ProgramacionEvento,
-                ProgramacionEvento.id_evento == EventoEmpresa.id_evento,
+                ProgramacionEvento.id_programacion_evento
+                == EventoEmpresa.id_programacion_evento,
             )
             .join(Empresa, Empresa.id_empresa == EventoEmpresa.id_empresa)
             .outerjoin(
@@ -510,7 +511,8 @@ class ReporteRepository:
             .join(
                 EventoEmpresa,
                 and_(
-                    EventoEmpresa.id_evento == Evento.id_evento,
+                    EventoEmpresa.id_programacion_evento
+                    == EventoContacto.id_programacion_evento,
                     EventoEmpresa.id_empresa == EventoContacto.id_empresa,
                 ),
             )
