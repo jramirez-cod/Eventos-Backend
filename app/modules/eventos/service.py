@@ -293,9 +293,11 @@ class EventoService:
     ) -> EventoResponse:
         evento = await self._get_evento_for_update(id_evento)
         self.validar_evento_abierto(evento)
-        await self._validate_politica(data)
         politica = await self.db.get(PoliticaEvento, evento.id_politica_evento)
         assert politica is not None
+        await self._validate_politica(
+            data, fecha_inicio_anterior=politica.fecha_inicio
+        )
         anterior = {
             "fecha_inicio": politica.fecha_inicio.isoformat(),
             "fecha_fin": politica.fecha_fin.isoformat(),
@@ -1204,9 +1206,16 @@ class EventoService:
         return await self.eventos.create_lugar(**data.model_dump())
 
     async def _validate_politica(
-        self, politica: PoliticaEventoCreate | PoliticaEventoUpdate
+        self,
+        politica: PoliticaEventoCreate | PoliticaEventoUpdate,
+        *,
+        fecha_inicio_anterior: date | None = None,
     ) -> None:
-        self._validate_date_range(politica.fecha_inicio, politica.fecha_fin)
+        self._validate_date_range(
+            politica.fecha_inicio,
+            politica.fecha_fin,
+            fecha_inicio_anterior=fecha_inicio_anterior,
+        )
         for detalle in politica.detalles:
             beneficio = await self.eventos.get_beneficio_activo(detalle.id_beneficio)
             if beneficio is None:
@@ -1237,9 +1246,14 @@ class EventoService:
             )
 
     @staticmethod
-    def _validate_date_range(fecha_inicio: date, fecha_fin: date) -> None:
+    def _validate_date_range(
+        fecha_inicio: date,
+        fecha_fin: date,
+        *,
+        fecha_inicio_anterior: date | None = None,
+    ) -> None:
         today = datetime.now(PERU_TIMEZONE).date()
-        if fecha_inicio < today:
+        if fecha_inicio != fecha_inicio_anterior and fecha_inicio < today:
             raise InvalidDateRangeError(
                 "La fecha de inicio no puede estar en el pasado."
             )

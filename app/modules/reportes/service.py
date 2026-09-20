@@ -14,6 +14,10 @@ from app.core.config import settings
 from app.modules.auditoria.repository import AuditoriaRepository
 from app.modules.eventos.models import EventoModalidad
 from app.modules.maestros.models import TipoCalculoBeneficio
+from app.modules.participantes.beneficio_evaluador import (
+    AsignacionUso,
+    calcular_cupo_restante,
+)
 from app.modules.reportes.dto import (
     AcreditacionReporteResponse,
     AreaReporte,
@@ -23,6 +27,8 @@ from app.modules.reportes.dto import (
     CategoriaFiltroOpcion,
     ClasificacionReporte,
     CoberturaResponse,
+    CupoAnioItem,
+    CupoAnioResponse,
     DashboardReporteResponse,
     DetalleReporteItem,
     DetalleReporteListResponse,
@@ -655,6 +661,88 @@ class ReporteService:
         return BeneficioReporteResponse(
             contexto=self._context(filtros), items=items, advertencias=self._warnings(filtros)
         )
+
+    async def obtener_cupos_por_anio(self) -> CupoAnioResponse:
+        afiliaciones = await self.reportes.list_afiliaciones_activas_todos_eventos()
+        politicas = await self.reportes.list_politica_por_anio_todos_eventos()
+        asignaciones = await self.reportes.list_asignaciones_por_anio_todos_eventos()
+
+        politica_por_evento_categoria: dict[tuple[int, int], list[tuple[Any, ...]]] = (
+            defaultdict(list)
+        )
+        for row in politicas:
+            id_evento, id_categoria = row[0], row[1]
+            politica_por_evento_categoria[(id_evento, id_categoria)].append(row)
+
+        usos_por_combo: dict[tuple[int, int, int], list[AsignacionUso]] = defaultdict(list)
+        for id_evento, id_empresa, id_beneficio, id_asignacion, codigo_grupo, asistio in asignaciones:
+            usos_por_combo[(id_evento, id_empresa, id_beneficio)].append(
+                AsignacionUso(
+                    id_asignacion_beneficio=id_asignacion,
+                    codigo_grupo=codigo_grupo,
+                    asistencia_evento=asistio,
+                )
+            )
+
+        items: list[CupoAnioItem] = []
+        for (
+            id_evento,
+            nombre_evento,
+            estado_evento,
+            id_empresa,
+            nombre_empresa,
+            ruc,
+            id_categoria,
+            nombre_categoria,
+        ) in afiliaciones:
+            for (
+                _,
+                _,
+                id_beneficio,
+                nombre_beneficio,
+                personas_por_asignacion,
+                entradas_gratuitas,
+            ) in politica_por_evento_categoria.get((id_evento, id_categoria), []):
+                filas = usos_por_combo.get((id_evento, id_empresa, id_beneficio), [])
+                restante = calcular_cupo_restante(
+                    tipo_calculo=TipoCalculoBeneficio.POR_ANIO,
+                    entradas_gratuitas=entradas_gratuitas,
+                    personas_por_asignacion=personas_por_asignacion,
+                    filas_existentes=filas,
+                )
+                assert restante is not None
+                # calcular_cupo_restante trabaja en "personas" (multiplica por
+                # personas_por_asignacion); para beneficios como "Entrada doble"
+                # se muestra en unidad de "entradas" (parejas), no de personas
+                # individuales. Como EvaluadorPorAnio solo descuenta grupos
+                # completos (todo o nada), estos valores siempre son múltiplos
+                # exactos de personas_por_asignacion.
+                total_personas = entradas_gratuitas * personas_por_asignacion
+                disponibles_personas = max(restante, 0)
+                usados_personas = total_personas - disponibles_personas
+                items.append(
+                    CupoAnioItem(
+                        id_evento=id_evento,
+                        nombre_evento=nombre_evento,
+                        estado_evento=estado_evento.value
+                        if hasattr(estado_evento, "value")
+                        else str(estado_evento),
+                        id_empresa=id_empresa,
+                        nombre_empresa=nombre_empresa,
+                        ruc=ruc,
+                        id_categoria=id_categoria,
+                        nombre_categoria=nombre_categoria,
+                        id_beneficio=id_beneficio,
+                        nombre_beneficio=nombre_beneficio,
+                        entradas_gratuitas=entradas_gratuitas,
+                        personas_por_asignacion=personas_por_asignacion,
+                        cupos_totales=total_personas // personas_por_asignacion,
+                        cupos_utilizados=usados_personas // personas_por_asignacion,
+                        cupos_disponibles=disponibles_personas // personas_por_asignacion,
+                    )
+                )
+        items.sort(key=lambda item: (item.nombre_empresa, item.nombre_evento, item.nombre_beneficio))
+        return CupoAnioResponse(items=items)
 
     async def obtener_acreditacion(
         self, id_evento: int, filtros: ReporteEventoFiltros

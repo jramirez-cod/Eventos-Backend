@@ -461,3 +461,25 @@ class ReporteErrorResponse(BaseModel):
     detail: str
     codigo: str
     campo: str | None = None
+
+
+class CupoAnioItem(BaseModel):
+    id_evento: int
+    nombre_evento: str
+    estado_evento: str
+    id_empresa: int
+    nombre_empresa: str
+    ruc: str
+    id_categoria: int
+    nombre_categoria: str
+    id_beneficio: int
+    nombre_beneficio: str
+    entradas_gratuitas: int
+    personas_por_asignacion: int
+    cupos_totales: int
+    cupos_utilizados: int
+    cupos_disponibles: int
+
+
+class CupoAnioResponse(BaseModel):
+    items: list[CupoAnioItem]

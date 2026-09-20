@@ -12,6 +12,7 @@ from app.modules.eventos.models import EventoEstado, EventoModalidad
 from app.modules.reportes.dto import (
     AcreditacionReporteResponse,
     BeneficioReporteResponse,
+    CupoAnioResponse,
     DashboardReporteResponse,
     DetalleReporteListResponse,
     DistribucionCategoriaResponse,
@@ -111,6 +112,23 @@ def reporte_filtros(
         page=page,
         page_size=page_size,
     )
+
+
+@router.get(
+    "/cupos-por-anio",
+    response_model=CupoAnioResponse,
+    summary="Cupos restantes de beneficios 'por año' por empresa y evento",
+    description=(
+        "Vista consolidada de todas las empresas afiliadas, en todos los "
+        "eventos, con el cupo restante de cada beneficio de tipo 'por año' "
+        "(p.ej. Entrada doble)."
+    ),
+)
+async def cupos_por_anio(
+    actor: Usuario = Depends(require_permission(MODULO_REPORTES, PERMISO_CONSULTAR)),
+    db: AsyncSession = Depends(get_db),
+) -> CupoAnioResponse:
+    return await ReporteService(db).obtener_cupos_por_anio()
 
 
 @router.get(
