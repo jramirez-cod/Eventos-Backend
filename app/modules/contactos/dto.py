@@ -22,12 +22,21 @@ class ContactoCreateData(BaseModel):
     genero: Genero
     celular: str | None = Field(default=None, min_length=1, max_length=50)
     correo: EmailStr | None = None
+    alias: str | None = Field(default=None, max_length=120)
     es_contacto_principal: bool = False
 
     @field_validator("nombres", "apellidos", "numero_documento", mode="before")
     @classmethod
     def limpiar_texto(cls, value: object) -> object:
         return value.strip() if isinstance(value, str) else value
+
+    @field_validator("alias", mode="before")
+    @classmethod
+    def limpiar_alias(cls, value: object) -> object:
+        if isinstance(value, str):
+            value = value.strip()
+            return value or None
+        return value
 
     @field_validator("genero", mode="before")
     @classmethod
@@ -56,12 +65,21 @@ class ContactoUpdate(BaseModel):
     genero: Genero | None = None
     celular: str | None = Field(default=None, min_length=1, max_length=50)
     correo: EmailStr | None = None
+    alias: str | None = Field(default=None, max_length=120)
     es_contacto_principal: bool | None = None
 
     @field_validator("nombres", "apellidos", "numero_documento", mode="before")
     @classmethod
     def limpiar_texto(cls, value: object) -> object:
         return value.strip() if isinstance(value, str) else value
+
+    @field_validator("alias", mode="before")
+    @classmethod
+    def limpiar_alias(cls, value: object) -> object:
+        if isinstance(value, str):
+            value = value.strip()
+            return value or None
+        return value
 
     @field_validator("genero", mode="before")
     @classmethod
@@ -124,6 +142,7 @@ class ContactoResponse(BaseModel):
     genero: Genero
     celular: str | None
     correo: str | None
+    alias: str | None
     es_contacto_principal: bool
     estado: bool
 

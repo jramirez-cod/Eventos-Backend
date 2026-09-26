@@ -81,6 +81,10 @@ class Contacto(Base):
         String(254),
     )
 
+    alias: Mapped[str | None] = mapped_column(
+        String(120),
+    )
+
     es_contacto_principal: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,

@@ -80,6 +80,7 @@ class ContactoRepository:
         genero: str,
         celular: str | None,
         correo: str | None,
+        alias: str | None = None,
         es_contacto_principal: bool,
     ) -> Contacto:
         contacto = Contacto(
@@ -92,6 +93,7 @@ class ContactoRepository:
             genero=genero,
             celular=celular,
             correo=correo,
+            alias=alias,
             es_contacto_principal=es_contacto_principal,
             estado=True,
         )

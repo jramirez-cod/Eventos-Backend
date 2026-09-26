@@ -1063,7 +1063,7 @@ class ParticipanteService:
     ) -> EventoContactoResponse:
         detalle = await self._get_evento_contacto_detalle(id_evento_contacto)
         await self._get_open_programacion(detalle.evento_contacto.id_programacion_evento)
-        nombre_completo, _, correo, _ = self._participante_datos(detalle)
+        nombre_completo, _, correo, _, _ = self._participante_datos(detalle)
         if not correo:
             raise ParticipanteQrNotFoundError(
                 "El contacto no tiene un correo registrado."
@@ -1410,7 +1410,7 @@ class ParticipanteService:
     @staticmethod
     def _participante_datos(
         detalle: EventoContactoDetalle,
-    ) -> tuple[str, str | None, str | None, str | None]:
+    ) -> tuple[str, str | None, str | None, str | None, str | None]:
         evento_contacto = detalle.evento_contacto
         if detalle.contacto is not None:
             contacto = detalle.contacto
@@ -1419,6 +1419,7 @@ class ParticipanteService:
                 contacto.numero_documento,
                 contacto.correo,
                 contacto.celular,
+                contacto.alias,
             )
         nombre_completo = (
             f"{evento_contacto.invitado_nombres} {evento_contacto.invitado_apellidos}"
@@ -1428,17 +1429,19 @@ class ParticipanteService:
             evento_contacto.invitado_numero_documento,
             evento_contacto.invitado_correo,
             evento_contacto.invitado_celular,
+            None,
         )
 
     @staticmethod
     def _escaneo_response(detalle: EventoContactoDetalle) -> EscaneoQrResponse:
         evento_contacto = detalle.evento_contacto
-        nombre_completo, numero_documento, _, _ = (
+        nombre_completo, numero_documento, _, _, alias = (
             ParticipanteService._participante_datos(detalle)
         )
         return EscaneoQrResponse(
             id_evento_contacto=evento_contacto.id_evento_contacto,
             nombre_completo=nombre_completo,
+            alias=alias,
             numero_documento=numero_documento,
             nombre_empresa=detalle.empresa.nombre_empresa,
             id_beneficio_asignado=detalle.id_beneficio_asignado,
@@ -1500,7 +1503,7 @@ class ParticipanteService:
         detalle: EventoContactoDetalle,
     ) -> EventoContactoResponse:
         evento_contacto = detalle.evento_contacto
-        nombre_completo, numero_documento, correo, celular = (
+        nombre_completo, numero_documento, correo, celular, _ = (
             ParticipanteService._participante_datos(detalle)
         )
         return EventoContactoResponse(

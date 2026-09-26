@@ -134,6 +134,7 @@ class ContactoService:
                 genero=data.genero,
                 celular=celular,
                 correo=str(data.correo) if data.correo is not None else None,
+                alias=data.alias,
                 es_contacto_principal=data.es_contacto_principal,
             )
             await self.contactos.create_historial_empresa(
@@ -498,6 +499,7 @@ class ContactoService:
             "genero": contacto.genero,
             "celular": contacto.celular,
             "correo": contacto.correo,
+            "alias": contacto.alias,
             "es_contacto_principal": contacto.es_contacto_principal,
             "estado": contacto.estado,
         }
@@ -526,6 +528,7 @@ class ContactoService:
             genero=contacto.genero,
             celular=contacto.celular,
             correo=contacto.correo,
+            alias=contacto.alias,
             es_contacto_principal=contacto.es_contacto_principal,
             estado=contacto.estado,
         )
