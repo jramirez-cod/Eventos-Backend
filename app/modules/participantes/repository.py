@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from typing import Any
 
-from sqlalchemy import Select, and_, func, or_, select
+from sqlalchemy import Select, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -95,15 +95,7 @@ class ParticipanteRepository:
             EventoEmpresa.id_programacion_evento == id_programacion_evento,
             EventoEmpresa.id_empresa == id_empresa,
         )
-        evento_empresa = await self.db.scalar(stmt)
-        if evento_empresa is not None:
-            evento_empresa.id_contacto_principal = await self.db.scalar(
-                select(Contacto.id_contacto).where(
-                    Contacto.id_empresa == evento_empresa.id_empresa,
-                    Contacto.es_contacto_principal.is_(True),
-                )
-            )
-        return evento_empresa
+        return await self.db.scalar(stmt)
 
     async def get_evento_empresa_activa(
         self, *, id_programacion_evento: int, id_empresa: int
@@ -113,15 +105,7 @@ class ParticipanteRepository:
             EventoEmpresa.id_empresa == id_empresa,
             EventoEmpresa.estado.is_(True),
         )
-        evento_empresa = await self.db.scalar(stmt)
-        if evento_empresa is not None:
-            evento_empresa.id_contacto_principal = await self.db.scalar(
-                select(Contacto.id_contacto).where(
-                    Contacto.id_empresa == evento_empresa.id_empresa,
-                    Contacto.es_contacto_principal.is_(True),
-                )
-            )
-        return evento_empresa
+        return await self.db.scalar(stmt)
 
     async def get_evento_empresa_by_id(
         self,
@@ -139,16 +123,7 @@ class ParticipanteRepository:
             )
         if for_update:
             stmt = stmt.with_for_update()
-        evento_empresa = await self.db.scalar(stmt)
-        if evento_empresa is None:
-            return None
-        evento_empresa.id_contacto_principal = await self.db.scalar(
-            select(Contacto.id_contacto).where(
-                Contacto.id_empresa == evento_empresa.id_empresa,
-                Contacto.es_contacto_principal.is_(True),
-            )
-        )
-        return evento_empresa
+        return await self.db.scalar(stmt)
 
     async def create_evento_empresa(
         self, *, id_programacion_evento: int, id_empresa: int
@@ -396,10 +371,7 @@ class ParticipanteRepository:
             .join(Categoria, Categoria.id_categoria == DetalleCategoria.id_categoria)
             .outerjoin(
                 principal,
-                and_(
-                    principal.id_empresa == EventoEmpresa.id_empresa,
-                    principal.es_contacto_principal.is_(True),
-                ),
+                principal.id_contacto == EventoEmpresa.id_contacto_principal,
             )
             .outerjoin(
                 CodigoAccesoPrincipal,
@@ -450,9 +422,6 @@ class ParticipanteRepository:
     def _to_evento_empresa_detalle(row: Any) -> EventoEmpresaDetalle:
         evento_empresa = row[0]
         evento_empresa.id_programacion_evento = row[1]
-        evento_empresa.id_contacto_principal = (
-            row[5].id_contacto if row[5] is not None else None
-        )
         return EventoEmpresaDetalle(
             evento_empresa=evento_empresa,
             id_programacion_evento=row[1],
