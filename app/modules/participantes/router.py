@@ -20,6 +20,7 @@ from app.modules.contactos.service import (
     TipoDocumentoNotFoundError,
 )
 from app.modules.participantes.dto import (
+    AfiliarEmpresasPorGrupoResponse,
     AsignarBeneficioRequest,
     BeneficioDisponibleResponse,
     ContactoDesdeEventoCreate,
@@ -198,6 +199,29 @@ async def listar_empresas_programacion(
     try:
         return await ParticipanteService(db).listar_empresas_programacion(
             id_programacion_evento
+        )
+    except ParticipanteServiceError as exc:
+        _raise_http_error(exc)
+        raise
+
+
+@router.post(
+    "/programaciones/{id_programacion_evento}/empresas/por-grupo/{id_grupo}",
+    response_model=AfiliarEmpresasPorGrupoResponse,
+)
+async def afiliar_empresas_por_grupo(
+    id_programacion_evento: int = Path(gt=0),
+    id_grupo: int = Path(gt=0),
+    actor: Usuario = Depends(
+        require_permission(MODULO_PARTICIPANTES, PERMISO_AFILIAR_EMPRESA)
+    ),
+    db: AsyncSession = Depends(get_db),
+) -> AfiliarEmpresasPorGrupoResponse:
+    try:
+        return await ParticipanteService(db).afiliar_empresas_por_grupo(
+            id_programacion_evento=id_programacion_evento,
+            id_grupo=id_grupo,
+            actor=actor,
         )
     except ParticipanteServiceError as exc:
         _raise_http_error(exc)

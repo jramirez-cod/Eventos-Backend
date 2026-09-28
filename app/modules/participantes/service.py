@@ -23,6 +23,7 @@ from app.modules.comunicaciones.email_service import (
 from app.modules.comunicaciones.service import CorreoDeliveryService
 from app.modules.contactos.service import ContactoService
 from app.modules.empresas.models import Empresa
+from app.modules.empresas.repository import EmpresaRepository
 from app.modules.eventos.models import ProgramacionEvento
 from app.modules.eventos.repository import EventoRepository
 from app.modules.eventos.service import (
@@ -37,6 +38,7 @@ from app.modules.participantes.beneficio_evaluador import (
     hay_cupo_disponible,
 )
 from app.modules.participantes.dto import (
+    AfiliarEmpresasPorGrupoResponse,
     AsignarBeneficioRequest,
     BeneficioDisponibleResponse,
     ContactoDesdeEventoCreate,
@@ -263,6 +265,33 @@ class ParticipanteService:
         return await self._get_evento_empresa_response(
             evento_empresa.id_evento_empresa,
             id_programacion_evento=id_programacion_evento,
+        )
+
+    async def afiliar_empresas_por_grupo(
+        self, *, id_programacion_evento: int, id_grupo: int, actor: Usuario
+    ) -> AfiliarEmpresasPorGrupoResponse:
+        await self._get_open_programacion(id_programacion_evento)
+        empresas = await EmpresaRepository(self.db).list_all_detallado(
+            id_grupo=id_grupo, estado=True
+        )
+
+        afiliadas = 0
+        omitidas = 0
+        for empresa, _grupo, _categoria in empresas:
+            try:
+                await self.afiliar_empresa_evento(
+                    id_programacion_evento=id_programacion_evento,
+                    id_empresa=empresa.id_empresa,
+                    actor=actor,
+                )
+                afiliadas += 1
+            except DuplicateEventoEmpresaError:
+                omitidas += 1
+
+        return AfiliarEmpresasPorGrupoResponse(
+            total_grupo=len(empresas),
+            afiliadas=afiliadas,
+            omitidas=omitidas,
         )
 
     async def desafiliar_empresa(

@@ -14,6 +14,12 @@ class EventoEmpresaCreate(BaseModel):
     id_empresa: int = Field(gt=0)
 
 
+class AfiliarEmpresasPorGrupoResponse(BaseModel):
+    total_grupo: int
+    afiliadas: int
+    omitidas: int
+
+
 class EventoEmpresaResponse(BaseModel):
     id_evento_empresa: int
     id_programacion_evento: int
