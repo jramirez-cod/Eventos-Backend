@@ -1152,7 +1152,11 @@ class ParticipanteService:
         )
         enviados = 0
         omitidos = 0
+        ya_enviados = 0
         for id_evento_contacto in ids:
+            if await self._tiene_qr_enviado(id_evento_contacto):
+                ya_enviados += 1
+                continue
             try:
                 await self.enviar_qr(
                     id_evento_contacto=id_evento_contacto, actor=actor
@@ -1160,7 +1164,15 @@ class ParticipanteService:
                 enviados += 1
             except (ParticipanteServiceError, EmailDeliveryError):
                 omitidos += 1
-        return EnviarQrMasivoResponse(enviados=enviados, omitidos=omitidos)
+        return EnviarQrMasivoResponse(
+            enviados=enviados, omitidos=omitidos, ya_enviados=ya_enviados
+        )
+
+    async def _tiene_qr_enviado(self, id_evento_contacto: int) -> bool:
+        qr = await self.participantes.get_participante_qr_by_evento_contacto(
+            id_evento_contacto
+        )
+        return qr is not None and qr.fecha_envio is not None
 
     async def escanear_qr(self, codigo_seguro: str) -> EscaneoQrResponse:
         qr = await self.participantes.get_participante_qr_by_codigo(codigo_seguro)

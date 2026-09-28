@@ -182,6 +182,7 @@ class ReimprimirCredencialRequest(BaseModel):
 class EnviarQrMasivoResponse(BaseModel):
     enviados: int
     omitidos: int
+    ya_enviados: int
 
 
 class EnviarCodigoAccesoMasivoResponse(BaseModel):
