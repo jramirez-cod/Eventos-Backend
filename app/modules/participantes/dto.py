@@ -101,6 +101,7 @@ class EventoContactoResponse(BaseModel):
     id_contacto: int | None
     es_invitado: bool
     nombre_completo: str
+    alias: str | None = None
     numero_documento: str | None
     correo: str | None
     celular: str | None

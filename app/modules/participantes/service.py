@@ -1503,7 +1503,7 @@ class ParticipanteService:
         detalle: EventoContactoDetalle,
     ) -> EventoContactoResponse:
         evento_contacto = detalle.evento_contacto
-        nombre_completo, numero_documento, correo, celular, _ = (
+        nombre_completo, numero_documento, correo, celular, alias = (
             ParticipanteService._participante_datos(detalle)
         )
         return EventoContactoResponse(
@@ -1512,6 +1512,7 @@ class ParticipanteService:
             id_contacto=evento_contacto.id_contacto,
             es_invitado=evento_contacto.id_contacto is None,
             nombre_completo=nombre_completo,
+            alias=alias,
             numero_documento=numero_documento,
             correo=correo,
             celular=celular,
