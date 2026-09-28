@@ -285,7 +285,11 @@ class ParticipanteService:
                     actor=actor,
                 )
                 afiliadas += 1
-            except DuplicateEventoEmpresaError:
+            except ParticipanteServiceError:
+                # Una empresa individual puede fallar (ya afiliada, inactivada
+                # justo en ese instante, etc.) sin que eso deba abortar el
+                # resto del lote: se cuenta como omitida y se sigue con las
+                # demás empresas del grupo.
                 omitidas += 1
 
         return AfiliarEmpresasPorGrupoResponse(
@@ -1214,14 +1218,41 @@ class ParticipanteService:
         ):
             raise PasswordIncorrectoError("Contraseña incorrecta.")
 
+        # Si el participante nunca llegó a imprimir su credencial (por
+        # ejemplo, su correo no le llegó y no tiene el QR a mano), esta
+        # misma acción autorizada por un responsable sirve como primera
+        # impresión: además de dejar la auditoría, marca asistencia y
+        # credencial impresa. Si ya estaba impresa, solo se audita la
+        # reimpresión sin tocar esos campos.
+        primera_impresion = not evento_contacto.credencial_impresa
         try:
-            await self.auditoria.create(
-                id_usuario=usuario_responsable.id_usuario,
-                id_modulo=await self._id_modulo(),
-                entidad="evento_contacto",
-                id_entidad=id_evento_contacto,
-                accion="REIMPRESION_CREDENCIAL",
-            )
+            if primera_impresion:
+                anterior = self._evento_contacto_values(evento_contacto)
+                await self.participantes.update_evento_contacto(
+                    evento_contacto,
+                    {
+                        "asistencia_evento": True,
+                        "hora_ingreso": datetime.now(timezone.utc),
+                        "credencial_impresa": True,
+                    },
+                )
+                await self.auditoria.create(
+                    id_usuario=usuario_responsable.id_usuario,
+                    id_modulo=await self._id_modulo(),
+                    entidad="evento_contacto",
+                    id_entidad=id_evento_contacto,
+                    accion="IMPRIMIR_CREDENCIAL_MANUAL",
+                    valor_anterior=anterior,
+                    valor_nuevo=self._evento_contacto_values(evento_contacto),
+                )
+            else:
+                await self.auditoria.create(
+                    id_usuario=usuario_responsable.id_usuario,
+                    id_modulo=await self._id_modulo(),
+                    entidad="evento_contacto",
+                    id_entidad=id_evento_contacto,
+                    accion="REIMPRESION_CREDENCIAL",
+                )
             await self.db.commit()
         except Exception:
             await self.db.rollback()
