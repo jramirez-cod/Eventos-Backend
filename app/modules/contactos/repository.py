@@ -112,28 +112,25 @@ class ContactoRepository:
         await self.db.flush()
         return contacto
 
-    async def unset_contacto_principal(
-        self, *, id_empresa: int, exclude_id: int | None = None
-    ) -> None:
-        stmt = select(Contacto).where(
-            Contacto.id_empresa == id_empresa,
-            Contacto.es_contacto_principal.is_(True),
+    async def list_contactos_principales(self, id_empresa: int) -> list[Contacto]:
+        stmt = (
+            select(Contacto)
+            .where(
+                Contacto.id_empresa == id_empresa,
+                Contacto.es_contacto_principal.is_(True),
+                Contacto.estado.is_(True),
+            )
+            .order_by(Contacto.id_contacto)
         )
-        if exclude_id is not None:
-            stmt = stmt.where(Contacto.id_contacto != exclude_id)
-        otros = list((await self.db.scalars(stmt)).all())
-        for otro in otros:
-            otro.es_contacto_principal = False
-        if otros:
-            await self.db.flush()
+        return list((await self.db.scalars(stmt)).all())
 
     async def get_contacto_principal(self, id_empresa: int) -> Contacto | None:
-        stmt = select(Contacto).where(
-            Contacto.id_empresa == id_empresa,
-            Contacto.es_contacto_principal.is_(True),
-            Contacto.estado.is_(True),
-        )
-        return await self.db.scalar(stmt)
+        # Una empresa puede tener varios contactos principales; esto solo
+        # entrega uno para usarlo como valor por defecto (por ejemplo, al
+        # afiliar la empresa a una programación). Para el envío del código
+        # de acceso se usa list_contactos_principales, que trae a todos.
+        principales = await self.list_contactos_principales(id_empresa)
+        return principales[0] if principales else None
 
     async def cambiar_empresa(
         self, contacto: Contacto, *, id_empresa: int

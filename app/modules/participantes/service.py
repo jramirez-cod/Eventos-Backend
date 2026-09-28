@@ -271,7 +271,7 @@ class ParticipanteService:
         self, *, id_programacion_evento: int, id_grupo: int, actor: Usuario
     ) -> AfiliarEmpresasPorGrupoResponse:
         await self._get_open_programacion(id_programacion_evento)
-        empresas = await EmpresaRepository(self.db).list_all_detallado(
+        empresas, _total = await EmpresaRepository(self.db).list_all_detallado(
             id_grupo=id_grupo, estado=True
         )
 
@@ -424,16 +424,17 @@ class ParticipanteService:
         if evento_empresa is None:
             raise EventoEmpresaNotFoundError("Afiliación no encontrada.")
         await self._get_open_programacion(evento_empresa.id_programacion_evento)
-        if evento_empresa.id_contacto_principal is None:
-            raise ContactoPrincipalInvalidoError(
-                "Debe asignar un contacto principal antes de enviar el código."
-            )
-        contacto = await self.participantes.get_contacto(
-            evento_empresa.id_contacto_principal
+        # El código se manda a TODOS los contactos que la empresa tiene
+        # marcados como principal (puede haber más de uno), no solo al
+        # seleccionado puntualmente para esta programación.
+        principales = await self.contactos.contactos.list_contactos_principales(
+            evento_empresa.id_empresa
         )
-        if contacto is None or not contacto.correo:
+        destinatarios = [c for c in principales if c.correo]
+        if not destinatarios:
             raise ContactoPrincipalInvalidoError(
-                "El contacto principal no tiene un correo registrado."
+                "La empresa no tiene contactos principales con correo "
+                "registrado; asigne al menos uno antes de enviar el código."
             )
         dias = await self.eventos.list_dias(evento_empresa.id_programacion_evento)
         if not dias:
@@ -466,24 +467,36 @@ class ParticipanteService:
                 codigo_hash=hash_portal_code(codigo_plano),
                 expira_en=expira_en,
             )
-            await self.correo.notify_codigo_acceso(
-                CodigoAccesoEmail(
-                    sender_email=SENDER_DESDE_CONFIGURACION,
-                    recipient_email=contacto.correo,
-                    recipient_name=contacto.nombre_completo,
-                    nombre_empresa=empresa.nombre_empresa,
-                    nombre_evento=(
-                        evento.nombre_evento if evento is not None else ""
-                    ),
-                    fecha_evento=self._formato_fecha_evento(primer_dia),
-                    codigo=codigo_plano,
-                    expira_en=self._formato_expiracion(expira_en),
-                    portal_url=(
-                        f"{settings.frontend_base_url}/portal-invitados"
-                        f"?codigo={codigo_plano}"
-                    ),
+            enviados_ok = 0
+            errores_envio: list[str] = []
+            for contacto in destinatarios:
+                try:
+                    await self.correo.notify_codigo_acceso(
+                        CodigoAccesoEmail(
+                            sender_email=SENDER_DESDE_CONFIGURACION,
+                            recipient_email=contacto.correo,
+                            recipient_name=contacto.nombre_completo,
+                            nombre_empresa=empresa.nombre_empresa,
+                            nombre_evento=(
+                                evento.nombre_evento if evento is not None else ""
+                            ),
+                            fecha_evento=self._formato_fecha_evento(primer_dia),
+                            codigo=codigo_plano,
+                            expira_en=self._formato_expiracion(expira_en),
+                            portal_url=(
+                                f"{settings.frontend_base_url}/portal-invitados"
+                                f"?codigo={codigo_plano}"
+                            ),
+                        )
+                    )
+                    enviados_ok += 1
+                except EmailDeliveryError as exc:
+                    errores_envio.append(str(exc))
+            if enviados_ok == 0:
+                raise EmailDeliveryError(
+                    "No se pudo enviar el código a ningún contacto principal: "
+                    + "; ".join(errores_envio)
                 )
-            )
             await self.participantes.mark_codigo_enviado(codigo)
             await self.auditoria.create(
                 id_usuario=actor.id_usuario,

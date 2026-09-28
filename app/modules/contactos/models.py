@@ -1,7 +1,7 @@
 from datetime import datetime
 
 from sqlalchemy import (
-    BigInteger, Boolean, CheckConstraint, DateTime, ForeignKey, Index, String, Text, func, text,
+    BigInteger, Boolean, CheckConstraint, DateTime, ForeignKey, String, Text, func,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -16,16 +16,9 @@ class Contacto(Base):
             "genero IN ('M', 'F', 'OTRO')",
             name="ck_contacto_genero",
         ),
-        # Regla de negocio: a lo sumo un contacto principal por empresa. La
-        # lógica ya demota al anterior antes de promover al nuevo; el índice
-        # la vuelve imposible de violar (concurrencia, scripts, SQL directo).
-        Index(
-            "uq_contacto_principal_por_empresa",
-            "id_empresa",
-            unique=True,
-            postgresql_where=text("es_contacto_principal"),
-            sqlite_where=text("es_contacto_principal"),
-        ),
+        # Una empresa puede tener varios contactos principales (por ejemplo,
+        # 2 o 3 personas que deben recibir el código de acceso), asi que no
+        # hay restricción de unicidad aquí.
     )
 
     id_contacto: Mapped[int] = mapped_column(

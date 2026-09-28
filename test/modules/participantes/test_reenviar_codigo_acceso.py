@@ -16,6 +16,7 @@ async def test_reenviar_codigo_acceso_invalida_el_anterior_y_crea_uno_nuevo(
         actor, headers, _, _, contacto, afiliacion = await evento_contacto_context(
             session, client
         )
+        contacto.es_contacto_principal = True
         await session.commit()
 
     id_evento_empresa = afiliacion["id_evento_empresa"]
@@ -116,6 +117,7 @@ async def test_no_envia_codigo_si_el_primer_dia_ya_termino(
         _, headers, programacion, _, contacto, afiliacion = (
             await evento_contacto_context(session, client)
         )
+        contacto.es_contacto_principal = True
         await session.commit()
 
     id_evento_empresa = afiliacion["id_evento_empresa"]

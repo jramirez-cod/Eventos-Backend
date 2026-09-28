@@ -1,3 +1,4 @@
+import math
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
@@ -22,6 +23,7 @@ from app.modules.empresas.dto import (
     ConsultaRucResponseDTO,
     EmpresaCreateDTO,
     EmpresaHistorialResponseDTO,
+    EmpresaPage,
     EmpresaRegistroCompletoDTO,
     EmpresaRegistroCompletoResponseDTO,
     EmpresaResponseDTO,
@@ -91,26 +93,38 @@ def _raise_contacto_http_error(exc: ContactoServiceError) -> None:
     raise exc
 
 
-@router.get("", response_model=list[EmpresaResponseDTO])
+@router.get("", response_model=EmpresaPage)
 async def listar_empresas(
     nombre: str | None = Query(default=None),
     ruc: str | None = Query(default=None),
     id_grupo: int | None = Query(default=None),
     id_categoria: int | None = Query(default=None),
     estado: bool | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    page_size: int | None = Query(default=None, ge=1, le=500),
     actor: Usuario = Depends(
         require_permission(MODULO_EMPRESAS, PERMISO_CREAR_EMPRESA)
     ),
     db: AsyncSession = Depends(get_db),
-) -> list[EmpresaResponseDTO]:
-    filas = await EmpresaRepository(db).list_all_detallado(
+) -> EmpresaPage:
+    filas, total = await EmpresaRepository(db).list_all_detallado(
         nombre=nombre,
         ruc=ruc,
         id_grupo=id_grupo,
         id_categoria=id_categoria,
         estado=estado,
+        page=page,
+        page_size=page_size,
     )
-    return [_to_response(empresa, grupo, categoria) for empresa, grupo, categoria in filas]
+    items = [_to_response(empresa, grupo, categoria) for empresa, grupo, categoria in filas]
+    effective_page_size = page_size if page_size is not None else (total or len(items) or 1)
+    return EmpresaPage(
+        items=items,
+        total=total,
+        page=page,
+        page_size=effective_page_size,
+        pages=math.ceil(total / effective_page_size) if total else 0,
+    )
 
 
 @router.get(

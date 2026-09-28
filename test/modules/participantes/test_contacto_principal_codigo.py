@@ -14,6 +14,46 @@ from test.modules.participantes.conftest import evento_contacto_context
 pytestmark = pytest.mark.asyncio
 
 
+async def test_enviar_codigo_llega_a_todos_los_contactos_marcados_como_principal(
+    client, session_factory
+) -> None:
+    """Una empresa puede tener varios contactos principales; el código debe
+    llegar a todos, no solo al primero o al elegido en el dropdown por
+    programación."""
+    async with session_factory() as session:
+        actor, headers, programacion, empresa, contacto, afiliacion = (
+            await evento_contacto_context(session, client)
+        )
+        segundo = await create_contacto(
+            session, empresa=empresa, actor=actor, sequence=51_001
+        )
+        tercero = await create_contacto(
+            session, empresa=empresa, actor=actor, sequence=51_002
+        )
+        contacto.es_contacto_principal = True
+        segundo.es_contacto_principal = True
+        tercero.es_contacto_principal = True
+        await session.commit()
+
+    id_evento_empresa = afiliacion["id_evento_empresa"]
+    envio = await client.post(
+        f"/api/v1/participantes/empresas/{id_evento_empresa}/reenviar-codigo",
+        headers=headers,
+        json={},
+    )
+    assert envio.status_code == 200, envio.text
+
+    async with session_factory() as session:
+        codigo = await session.scalar(
+            select(CodigoAccesoPrincipal).where(
+                CodigoAccesoPrincipal.id_evento_empresa == id_evento_empresa,
+                CodigoAccesoPrincipal.estado.is_(True),
+            )
+        )
+        assert codigo is not None
+        assert codigo.fecha_envio is not None
+
+
 async def test_reasignar_contacto_principal_invalida_codigo_anterior_y_permite_reenvio(
     client, session_factory
 ) -> None:
@@ -24,6 +64,11 @@ async def test_reasignar_contacto_principal_invalida_codigo_anterior_y_permite_r
         otro = await create_contacto(
             session, empresa=empresa, actor=actor, sequence=50_001
         )
+        # El envio ahora se dirige a los contactos marcados como principal a
+        # nivel de empresa (puede haber varios); el campo por programacion
+        # que se cambia con el PATCH mas abajo ya no decide el destinatario,
+        # solo invalida el codigo anterior al reasignarse.
+        contacto.es_contacto_principal = True
         await session.commit()
 
     id_evento_empresa = afiliacion["id_evento_empresa"]
@@ -109,6 +154,7 @@ async def test_codigo_expira_un_dia_antes_del_primer_dia(
         _, headers, programacion, empresa, contacto, afiliacion = (
             await evento_contacto_context(session, client)
         )
+        contacto.es_contacto_principal = True
         await session.commit()
 
     id_evento_empresa = afiliacion["id_evento_empresa"]
@@ -155,6 +201,10 @@ async def test_codigo_creado_para_evento_de_manana_no_nace_expirado(
         )
         assert dia is not None
         dia.fecha = datetime.now(ZoneInfo("America/Lima")).date() + timedelta(days=1)
+
+        contacto_db = await session.get(Contacto, contacto.id_contacto)
+        assert contacto_db is not None
+        contacto_db.es_contacto_principal = True
         await session.commit()
 
     id_evento_empresa = afiliacion["id_evento_empresa"]
@@ -324,6 +374,10 @@ async def test_codigo_para_evento_de_hoy_sirve_hasta_que_termina_el_dia(
         dia.fecha = hoy
         dia.hora_inicio = hora_inicio
         dia.hora_fin = hora_fin
+
+        contacto_db = await session.get(Contacto, contacto.id_contacto)
+        assert contacto_db is not None
+        contacto_db.es_contacto_principal = True
         await session.commit()
 
     id_evento_empresa = afiliacion["id_evento_empresa"]
@@ -381,6 +435,10 @@ async def test_codigo_usa_fin_del_dia_cuando_el_dia_no_tiene_hora_fin(
         assert dia is not None
         dia.hora_fin = None
         fecha_dia = dia.fecha
+
+        contacto_db = await session.get(Contacto, contacto.id_contacto)
+        assert contacto_db is not None
+        contacto_db.es_contacto_principal = True
         await session.commit()
 
     id_evento_empresa = afiliacion["id_evento_empresa"]

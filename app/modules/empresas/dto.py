@@ -53,6 +53,14 @@ class EmpresaResponseDTO(BaseModel):
     nombre_categoria: str
 
 
+class EmpresaPage(BaseModel):
+    items: list[EmpresaResponseDTO]
+    total: int
+    page: int
+    page_size: int
+    pages: int
+
+
 class EmpresaRegistroCompletoResponseDTO(BaseModel):
     empresa: EmpresaResponseDTO
     contactos: list[ContactoResponse]

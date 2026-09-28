@@ -18,7 +18,7 @@ def _contacto_payload(
     }
 
 
-async def test_marcar_contacto_principal_desmarca_a_los_demas_de_la_misma_empresa(
+async def test_marcar_contacto_principal_no_desmarca_a_los_demas_de_la_misma_empresa(
     client, session_factory
 ) -> None:
     async with session_factory() as session:
@@ -47,10 +47,10 @@ async def test_marcar_contacto_principal_desmarca_a_los_demas_de_la_misma_empres
         f"/api/v1/contactos/{primero.json()['id_contacto']}", headers=headers
     )
     assert releido.status_code == 200
-    assert releido.json()["es_contacto_principal"] is False
+    assert releido.json()["es_contacto_principal"] is True
 
 
-async def test_actualizar_contacto_a_principal_desmarca_a_los_demas(
+async def test_actualizar_contacto_a_principal_no_desmarca_a_los_demas(
     client, session_factory
 ) -> None:
     async with session_factory() as session:
@@ -85,4 +85,4 @@ async def test_actualizar_contacto_a_principal_desmarca_a_los_demas(
         f"/api/v1/contactos/{primero.json()['id_contacto']}", headers=headers
     )
     assert releido.status_code == 200
-    assert releido.json()["es_contacto_principal"] is False
+    assert releido.json()["es_contacto_principal"] is True

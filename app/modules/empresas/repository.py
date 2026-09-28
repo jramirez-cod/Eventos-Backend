@@ -1,6 +1,6 @@
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.categorias.models import Categoria, DetalleCategoria
@@ -44,8 +44,10 @@ class EmpresaRepository:
         id_grupo: int | None = None,
         id_categoria: int | None = None,
         estado: bool | None = None,
-    ) -> list[tuple[Empresa, Grupo, Categoria]]:
-        stmt = (
+        page: int = 1,
+        page_size: int | None = None,
+    ) -> tuple[list[tuple[Empresa, Grupo, Categoria]], int]:
+        base = (
             select(Empresa, Grupo, Categoria)
             .join(
                 DetalleCategoria,
@@ -53,21 +55,29 @@ class EmpresaRepository:
             )
             .join(Grupo, Grupo.id_grupo == DetalleCategoria.id_grupo)
             .join(Categoria, Categoria.id_categoria == DetalleCategoria.id_categoria)
-            .order_by(Empresa.id_empresa.desc())
         )
         if nombre:
-            stmt = stmt.where(Empresa.nombre_empresa.ilike(f"%{nombre}%"))
+            base = base.where(Empresa.nombre_empresa.ilike(f"%{nombre}%"))
         if ruc:
-            stmt = stmt.where(Empresa.ruc == ruc)
+            base = base.where(Empresa.ruc == ruc)
         if id_grupo is not None:
-            stmt = stmt.where(DetalleCategoria.id_grupo == id_grupo)
+            base = base.where(DetalleCategoria.id_grupo == id_grupo)
         if id_categoria is not None:
-            stmt = stmt.where(DetalleCategoria.id_categoria == id_categoria)
+            base = base.where(DetalleCategoria.id_categoria == id_categoria)
         if estado is not None:
-            stmt = stmt.where(Empresa.estado.is_(estado))
+            base = base.where(Empresa.estado.is_(estado))
+
+        total = int(
+            await self.db.scalar(select(func.count()).select_from(base.subquery())) or 0
+        )
+
+        stmt = base.order_by(Empresa.id_empresa.desc())
+        if page_size is not None:
+            stmt = stmt.offset((page - 1) * page_size).limit(page_size)
 
         result = await self.db.execute(stmt)
-        return [(empresa, grupo, categoria) for empresa, grupo, categoria in result.all()]
+        rows = [(empresa, grupo, categoria) for empresa, grupo, categoria in result.all()]
+        return rows, total
 
     async def create(
         self,
