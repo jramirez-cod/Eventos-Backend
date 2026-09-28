@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from typing import Any
 
-from sqlalchemy import Select, and_, func, or_, select, update
+from sqlalchemy import Select, and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -635,19 +635,14 @@ class ParticipanteRepository:
     async def set_contacto_principal(
         self, evento_empresa: EventoEmpresa, *, id_contacto: int
     ) -> EventoEmpresa:
-        await self.db.execute(
-            update(Contacto)
-            .where(
-                Contacto.id_empresa == evento_empresa.id_empresa,
-                Contacto.id_contacto != id_contacto,
-                Contacto.es_contacto_principal.is_(True),
-            )
-            .values(es_contacto_principal=False)
-        )
+        # Esto solo fija el contacto de referencia para esta afiliacion
+        # puntual (evento_empresa.id_contacto_principal). No debe tocar
+        # Contacto.es_contacto_principal: una empresa puede tener varios
+        # contactos marcados como principal, y afiliarla a una programacion
+        # no debe promover ni demover a ninguno de ellos.
         contacto = await self.db.get(Contacto, id_contacto)
         if contacto is None:
             raise ValueError("El contacto no existe.")
-        contacto.es_contacto_principal = True
         evento_empresa.id_contacto_principal = id_contacto
         await self.db.flush()
         return evento_empresa
