@@ -35,3 +35,6 @@ uploads/
 # documento
 docs/
 SistemaEventosCODIP_postgresql.sql
+
+# datos personales de importaciones puntuales (no deben ir al historial de git)
+scripts/data/
