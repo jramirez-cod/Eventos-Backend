@@ -1120,7 +1120,7 @@ class ParticipanteService:
         if qr is None:
             raise ParticipanteQrNotFoundError("Código QR no encontrado o inválido.")
         detalle = await self._get_evento_contacto_detalle(qr.id_evento_contacto)
-        return self._escaneo_response(detalle)
+        return await self._escaneo_response(detalle)
 
     async def imprimir_credencial(
         self, *, codigo_seguro: str, actor: Usuario
@@ -1162,7 +1162,7 @@ class ParticipanteService:
         detalle = await self._get_evento_contacto_detalle(
             evento_contacto.id_evento_contacto
         )
-        return self._escaneo_response(detalle)
+        return await self._escaneo_response(detalle)
 
     async def reimprimir_credencial(
         self, *, id_evento_contacto: int, data: ReimprimirCredencialRequest
@@ -1198,7 +1198,7 @@ class ParticipanteService:
             await self.db.rollback()
             raise
         detalle = await self._get_evento_contacto_detalle(id_evento_contacto)
-        return self._escaneo_response(detalle)
+        return await self._escaneo_response(detalle)
 
     # -- helpers -----------------------------------------------------
 
@@ -1432,14 +1432,18 @@ class ParticipanteService:
             None,
         )
 
-    @staticmethod
-    def _escaneo_response(detalle: EventoContactoDetalle) -> EscaneoQrResponse:
+    async def _escaneo_response(self, detalle: EventoContactoDetalle) -> EscaneoQrResponse:
         evento_contacto = detalle.evento_contacto
         nombre_completo, numero_documento, _, _, alias = (
             ParticipanteService._participante_datos(detalle)
         )
+        programacion = await self.participantes.get_programacion(
+            evento_contacto.id_programacion_evento
+        )
         return EscaneoQrResponse(
             id_evento_contacto=evento_contacto.id_evento_contacto,
+            id_evento=programacion.id_evento if programacion else None,
+            id_programacion_evento=evento_contacto.id_programacion_evento,
             nombre_completo=nombre_completo,
             alias=alias,
             numero_documento=numero_documento,

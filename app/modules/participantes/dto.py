@@ -155,6 +155,8 @@ class BeneficioDisponibleResponse(BaseModel):
 
 class EscaneoQrResponse(BaseModel):
     id_evento_contacto: int
+    id_evento: int | None = None
+    id_programacion_evento: int | None = None
     nombre_completo: str
     alias: str | None = None
     numero_documento: str | None
