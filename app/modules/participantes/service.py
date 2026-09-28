@@ -237,6 +237,7 @@ class ParticipanteService:
                     id_empresa=id_empresa,
                 )
                 accion = "AFILIAR_EMPRESA_EVENTO"
+            evento_empresa.id_contacto_principal = None
             contacto_principal = await self.contactos.contactos.get_contacto_principal(
                 id_empresa
             )

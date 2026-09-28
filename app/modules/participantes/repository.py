@@ -88,6 +88,23 @@ class ParticipanteRepository:
         stmt = select(Contacto).where(Contacto.id_contacto.in_(ids_contacto))
         return list((await self.db.scalars(stmt)).all())
 
+    async def _attach_contacto_principal(self, evento_empresa: EventoEmpresa) -> None:
+        # id_contacto_principal no es una columna real de evento_empresa: es
+        # un atributo transitorio que se rellena aqui, en memoria, a partir
+        # de los contactos de la empresa marcados como principal (puede
+        # haber varios; se toma uno de forma deterministica con LIMIT 1
+        # para no romper nada que siga leyendo este atributo como si fuera
+        # "el" contacto principal de referencia).
+        evento_empresa.id_contacto_principal = await self.db.scalar(
+            select(Contacto.id_contacto)
+            .where(
+                Contacto.id_empresa == evento_empresa.id_empresa,
+                Contacto.es_contacto_principal.is_(True),
+            )
+            .order_by(Contacto.id_contacto)
+            .limit(1)
+        )
+
     async def get_evento_empresa(
         self, *, id_programacion_evento: int, id_empresa: int
     ) -> EventoEmpresa | None:
@@ -95,7 +112,10 @@ class ParticipanteRepository:
             EventoEmpresa.id_programacion_evento == id_programacion_evento,
             EventoEmpresa.id_empresa == id_empresa,
         )
-        return await self.db.scalar(stmt)
+        evento_empresa = await self.db.scalar(stmt)
+        if evento_empresa is not None:
+            await self._attach_contacto_principal(evento_empresa)
+        return evento_empresa
 
     async def get_evento_empresa_activa(
         self, *, id_programacion_evento: int, id_empresa: int
@@ -105,7 +125,10 @@ class ParticipanteRepository:
             EventoEmpresa.id_empresa == id_empresa,
             EventoEmpresa.estado.is_(True),
         )
-        return await self.db.scalar(stmt)
+        evento_empresa = await self.db.scalar(stmt)
+        if evento_empresa is not None:
+            await self._attach_contacto_principal(evento_empresa)
+        return evento_empresa
 
     async def get_evento_empresa_by_id(
         self,
@@ -123,7 +146,11 @@ class ParticipanteRepository:
             )
         if for_update:
             stmt = stmt.with_for_update()
-        return await self.db.scalar(stmt)
+        evento_empresa = await self.db.scalar(stmt)
+        if evento_empresa is None:
+            return None
+        await self._attach_contacto_principal(evento_empresa)
+        return evento_empresa
 
     async def create_evento_empresa(
         self, *, id_programacion_evento: int, id_empresa: int
@@ -351,6 +378,22 @@ class ParticipanteRepository:
         id_programacion_evento: int | None = None,
     ) -> Select[Any]:
         principal = aliased(Contacto)
+        # Una empresa puede tener varios contactos marcados como principal;
+        # para no multiplicar cada fila de evento_empresa una vez por cada
+        # uno (fan-out), se elige uno solo de forma deterministica (el de
+        # menor id) mediante una subconsulta escalar, y se une por ese id
+        # puntual en vez de por el flag directamente.
+        principal_id = (
+            select(Contacto.id_contacto)
+            .where(
+                Contacto.id_empresa == EventoEmpresa.id_empresa,
+                Contacto.es_contacto_principal.is_(True),
+            )
+            .order_by(Contacto.id_contacto)
+            .limit(1)
+            .correlate(EventoEmpresa)
+            .scalar_subquery()
+        )
         return (
             select(
                 EventoEmpresa,
@@ -371,7 +414,7 @@ class ParticipanteRepository:
             .join(Categoria, Categoria.id_categoria == DetalleCategoria.id_categoria)
             .outerjoin(
                 principal,
-                principal.id_contacto == EventoEmpresa.id_contacto_principal,
+                principal.id_contacto == principal_id,
             )
             .outerjoin(
                 CodigoAccesoPrincipal,
@@ -422,6 +465,9 @@ class ParticipanteRepository:
     def _to_evento_empresa_detalle(row: Any) -> EventoEmpresaDetalle:
         evento_empresa = row[0]
         evento_empresa.id_programacion_evento = row[1]
+        evento_empresa.id_contacto_principal = (
+            row[5].id_contacto if row[5] is not None else None
+        )
         return EventoEmpresaDetalle(
             evento_empresa=evento_empresa,
             id_programacion_evento=row[1],
