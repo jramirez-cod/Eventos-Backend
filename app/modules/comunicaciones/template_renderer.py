@@ -63,8 +63,14 @@ class CorreoTemplateRenderer:
         asunto: str,
         cuerpo_html: str,
         cuerpo_texto: str,
-        variables_permitidas: list[str],
+        variables_permitidas: list[str] | None,
     ) -> None:
+        # variables_permitidas puede llegar en None si la plantilla se
+        # sembro con una version anterior del esquema (la migracion que la
+        # rellena solo corre en el setup inicial, no en cada arranque): sin
+        # esta guarda, set(None) explota con un error sin capturar (500)
+        # en vez del 400 que corresponde.
+        permitidas = variables_permitidas or []
         if "\r" in asunto or "\n" in asunto:
             raise TemplateValidationError(
                 "El asunto no puede contener saltos de línea."
@@ -76,10 +82,10 @@ class CorreoTemplateRenderer:
                 )
             try:
                 parsed = self.environment.parse(value)
+                used = meta.find_undeclared_variables(parsed)
             except Exception as exc:
                 raise TemplateValidationError("La sintaxis de la plantilla es inválida.") from exc
-            used = meta.find_undeclared_variables(parsed)
-            unknown = sorted(used - set(variables_permitidas))
+            unknown = sorted(used - set(permitidas))
             if unknown:
                 raise TemplateValidationError(
                     "Variables no permitidas: " + ", ".join(unknown)
@@ -99,7 +105,7 @@ class CorreoTemplateRenderer:
         asunto: str,
         cuerpo_html: str,
         cuerpo_texto: str,
-        variables_permitidas: list[str],
+        variables_permitidas: list[str] | None,
         contexto: dict[str, Any],
     ) -> tuple[str, str, str]:
         self.validate(
@@ -108,7 +114,7 @@ class CorreoTemplateRenderer:
             cuerpo_texto=cuerpo_texto,
             variables_permitidas=variables_permitidas,
         )
-        unknown_context = sorted(set(contexto) - set(variables_permitidas))
+        unknown_context = sorted(set(contexto) - set(variables_permitidas or []))
         if unknown_context:
             raise TemplateValidationError(
                 "El contexto contiene variables no permitidas: "

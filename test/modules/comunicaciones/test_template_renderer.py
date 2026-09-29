@@ -65,3 +65,27 @@ def test_rechaza_bloques_jinja() -> None:
             variables_permitidas=[],
         )
 
+
+def test_variables_permitidas_none_no_revienta_con_error_sin_capturar() -> None:
+    """Una plantilla sembrada con un esquema viejo puede tener
+    variables_permitidas en NULL; debe rechazarse como plantilla invalida
+    (400), no con un error sin capturar (500)."""
+    renderer = CorreoTemplateRenderer()
+
+    with pytest.raises(TemplateValidationError, match="no permitidas"):
+        renderer.validate(
+            asunto="Hola {{ nombre }}",
+            cuerpo_html="<p>Hola</p>",
+            cuerpo_texto="Hola",
+            variables_permitidas=None,
+        )
+
+    with pytest.raises(TemplateValidationError, match="no permitidas"):
+        renderer.render(
+            asunto="Asunto",
+            cuerpo_html="<p>Hola</p>",
+            cuerpo_texto="Hola",
+            variables_permitidas=None,
+            contexto={"nombre": "Ana"},
+        )
+
