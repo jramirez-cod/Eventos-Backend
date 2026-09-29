@@ -220,8 +220,8 @@ async def agregar_participantes(
     return stats
 
 
-async def main(id_programacion_evento: int) -> None:
-    with open(DATA_PATH, encoding="utf-8") as f:
+async def main(id_programacion_evento: int, data_path: Path) -> None:
+    with open(data_path, encoding="utf-8") as f:
         registros = json.load(f)
 
     async with AsyncSessionLocal() as session:
@@ -266,5 +266,11 @@ if __name__ == "__main__":
         default=6,
         help="id_programacion_evento destino (default: 6, San Isidro 29/09).",
     )
+    parser.add_argument(
+        "--data",
+        type=str,
+        default=str(DATA_PATH),
+        help="Ruta al JSON con los registros a importar (default: scripts/data/import_ras_2909.json).",
+    )
     args = parser.parse_args()
-    asyncio.run(main(args.programacion))
+    asyncio.run(main(args.programacion, Path(args.data)))
